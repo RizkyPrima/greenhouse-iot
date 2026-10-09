@@ -1,0 +1,80 @@
+# =============================================================================
+# GREENHOUSE IoT PLATFORM — .gitignore
+# =============================================================================
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Environment dan secrets
+.env.*
+!.env.example
+
+# Node.js
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker
+.docker/
+
+# Prisma
+prisma/migrations/*.sql
+# Keep schema.prisma and migrations folder structure in git
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Misc
+*.pem
+*.key
+*.crt
+*.p12
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.next/
+coverage/
+
+# Logs
+*.log
+
+# Local databases
+*.sqlite
+*.db
+
+

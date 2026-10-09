@@ -1,0 +1,144 @@
+# =============================================================================
+# GREENHOUSE IoT PLATFORM — Docker Compose
+# Phase 1: Infrastructure (EMQX + PostgreSQL + Redis)
+# =============================================================================
+# Usage:
+#   1. cp .env.example .env
+#   2. Edit .env with your passwords
+#   3. docker compose up -d
+#   4. docker compose ps
+# =============================================================================
+
+name: greenhouse
+
+services:
+  # ---------------------------------------------------------------------------
+  # EMQX — MQTT Broker
+  # ---------------------------------------------------------------------------
+  emqx:
+    image: emqx/emqx:5.8.6
+    container_name: greenhouse-emqx
+    restart: unless-stopped
+
+    environment:
+      EMQX_NAME: greenhouse-emqx
+      EMQX_HOST: 127.0.0.1
+      EMQX_NODE__COOKIE: emqx_secret_cookie
+      EMQX_DASHBOARD__DEFAULT_USERNAME: ${EMQX_DASHBOARD_DEFAULT_USERNAME:-admin}
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: ${EMQX_DASHBOARD_DEFAULT_PASSWORD:-changeme123}
+      # Allow anonymous connections for development (Phase 1-3).
+      # Phase 5: switch to password-based or JWT auth.
+      EMQX_AUTHORIZATION__NO_MATCH: allow
+      EMQX_ALLOW_ANONYMOUS: "true"
+
+    ports:
+      - "${EMQX_MQTT_PORT:-1883}:1883"       # MQTT plain
+      - "${EMQX_WS_PORT:-8083}:8083"         # MQTT over WebSocket
+      - "${EMQX_WSS_PORT:-8084}:8084"        # MQTT over WebSocket (TLS)
+      - "${EMQX_MQTTS_PORT:-8883}:8883"      # MQTT over TLS
+      - "${EMQX_DASHBOARD_PORT:-18083}:18083" # EMQX Dashboard
+
+    volumes:
+      - emqx_data:/opt/emqx/data
+      - emqx_log:/opt/emqx/log
+      # Uncomment in Phase 5 when fine-grained ACL is needed:
+      # - ./infrastructure/emqx/acl.conf:/opt/emqx/etc/acl.conf:ro
+
+    networks:
+      - greenhouse-network
+
+    healthcheck:
+      test: ["CMD", "emqx", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — Primary Database
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: greenhouse-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-greenhouse_db}
+      POSTGRES_USER: ${POSTGRES_USER:-greenhouse_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme123}
+      # Store data in UTC
+      PGTZ: UTC
+      TZ: UTC
+
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+
+    networks:
+      - greenhouse-network
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-greenhouse_user} -d ${POSTGRES_DB:-greenhouse_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Redis — Cache & Realtime State
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7.4-alpine
+    container_name: greenhouse-redis
+    restart: unless-stopped
+
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-changeme123}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --appendonly yes
+      --appendfsync everysec
+
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+    volumes:
+      - redis_data:/data
+
+    networks:
+      - greenhouse-network
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme123}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  emqx_data:
+    name: greenhouse_emqx_data
+  emqx_log:
+    name: greenhouse_emqx_log
+  postgres_data:
+    name: greenhouse_postgres_data
+  redis_data:
+    name: greenhouse_redis_data
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  greenhouse-network:
+    name: greenhouse-network
+    driver: bridge

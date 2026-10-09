@@ -1,0 +1,303 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum GreenhouseStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+}
+
+enum ZoneStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum DeviceStatus {
+  ONLINE
+  STALE
+  OFFLINE
+}
+
+enum CommandStatus {
+  PENDING
+  SENT
+  ACKNOWLEDGED
+  EXECUTED
+  FAILED
+  TIMEOUT
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  OPERATOR
+  VIEWER
+  AI_AGENT
+}
+
+// ─── Authentication / User Models ────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships     OrganizationMembership[]
+  refreshSessions RefreshSession[]
+
+  @@map("users")
+}
+
+model OrganizationMembership {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  role           UserRole
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([userId])
+  @@index([organizationId])
+  @@map("organization_memberships")
+}
+
+model RefreshSession {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_sessions")
+}
+
+// ─── Organization ─────────────────────────────────────────────────────────────
+
+model Organization {
+  id          String    @id @default(cuid())
+  name        String
+  slug        String    @unique
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  greenhouses Greenhouse[]
+  memberships OrganizationMembership[]
+
+  @@map("organizations")
+}
+
+model Greenhouse {
+  id             String           @id @default(cuid())
+  organizationId String
+  name           String
+  code           String
+  description    String?
+  location       String?
+  timezone       String
+  status         GreenhouseStatus @default(ACTIVE)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  zones        Zone[]
+  devices      Device[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("greenhouses")
+}
+
+model Zone {
+  id           String     @id @default(cuid())
+  greenhouseId String
+  name         String
+  code         String
+  description  String?
+  status       ZoneStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  deletedAt    DateTime?
+
+  greenhouse Greenhouse @relation(fields: [greenhouseId], references: [id], onDelete: Cascade)
+  devices    Device[]
+  sensors    Sensor[]
+  actuators  Actuator[]
+
+  @@unique([greenhouseId, code])
+  @@index([greenhouseId])
+  @@map("zones")
+}
+
+model Device {
+  id              String       @id @default(cuid())
+  greenhouseId    String
+  zoneId          String?
+  deviceId        String       @unique
+  name            String
+  deviceType      String
+  firmwareVersion String?
+  hardwareVersion String?
+  status          DeviceStatus @default(OFFLINE)
+  lastSeenAt      DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  deletedAt       DateTime?
+
+  greenhouse       Greenhouse        @relation(fields: [greenhouseId], references: [id], onDelete: Cascade)
+  zone             Zone?             @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  sensors          Sensor[]
+  actuators        Actuator[]
+  telemetryRecords TelemetryRecord[]
+  controlCommands  ControlCommand[]
+
+  @@index([greenhouseId])
+  @@index([zoneId])
+  @@map("devices")
+}
+
+model Sensor {
+  id         String    @id @default(cuid())
+  deviceId   String
+  zoneId     String?
+  name       String
+  code       String
+  sensorType String
+  unit       String?
+  enabled    Boolean   @default(true)
+  metadata   Json?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  device          Device           @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  zone            Zone?            @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  telemetryValues TelemetryValue[]
+
+  @@unique([deviceId, code])
+  @@index([deviceId])
+  @@index([zoneId])
+  @@map("sensors")
+}
+
+model Actuator {
+  id           String    @id @default(cuid())
+  deviceId     String
+  zoneId       String?
+  name         String
+  code         String
+  actuatorType String
+  enabled      Boolean   @default(true)
+  metadata     Json?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  zone   Zone?  @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+
+  @@unique([deviceId, code])
+  @@index([deviceId])
+  @@index([zoneId])
+  @@map("actuators")
+}
+
+model TelemetryRecord {
+  id             String    @id @default(cuid())
+  deviceId       String
+  deviceMqttId   String
+  greenhouseId   String
+  sequenceNumber Int?
+  receivedAt     DateTime  @default(now())
+  processedAt    DateTime?
+  rawPayload     Json
+
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  values TelemetryValue[]
+
+  @@unique([deviceId, sequenceNumber])
+  @@index([deviceId])
+  @@index([greenhouseId])
+  @@index([receivedAt])
+  @@map("telemetry_records")
+}
+
+model TelemetryValue {
+  id                String   @id @default(cuid())
+  telemetryRecordId String
+  sensorId          String?
+  sensorCode        String
+  numericValue      Float?
+  stringValue       String?
+  unit              String?
+  timestamp         DateTime
+
+  record TelemetryRecord @relation(fields: [telemetryRecordId], references: [id], onDelete: Cascade)
+  sensor Sensor?         @relation(fields: [sensorId], references: [id], onDelete: SetNull)
+
+  @@index([telemetryRecordId])
+  @@index([sensorId])
+  @@index([timestamp])
+  @@map("telemetry_values")
+}
+
+model DeviceStatusLog {
+  id              String       @id @default(cuid())
+  deviceMqttId    String
+  greenhouseId    String
+  status          DeviceStatus
+  ipAddress       String?
+  rssi            Int?
+  freeHeap        Int?
+  uptime          Int?
+  firmwareVersion String?
+  rawPayload      Json?
+  receivedAt      DateTime     @default(now())
+
+  @@index([deviceMqttId])
+  @@index([greenhouseId])
+  @@index([receivedAt])
+  @@map("device_status_logs")
+}
+
+model ControlCommand {
+  id              String        @id @default(cuid())
+  commandId       String        @unique
+  deviceId        String
+  command         String
+  target          String
+  value           Json
+  status          CommandStatus @default(PENDING)
+  createdAt       DateTime      @default(now())
+  sentAt          DateTime?
+  acknowledgedAt  DateTime?
+  completedAt     DateTime?
+
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([commandId])
+  @@map("control_commands")
+}

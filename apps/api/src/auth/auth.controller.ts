@@ -58,4 +58,11 @@ export class AuthController {
   me(@CurrentUser() user: AuthenticatedUser) {
     return this.authService.me(user.id);
   }
+
+  @Get('capabilities')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get administrative capabilities for the current user' })
+  capabilities(@CurrentUser() user: AuthenticatedUser) {
+    return this.authService.capabilities(user.id);
+  }
 }

@@ -74,6 +74,32 @@ export class PlantsService {
     });
   }
 
+  listCatalogForAdmin() {
+    return this.prisma.plantCatalog.findMany({
+      include: {
+        versions: {
+          orderBy: { version: 'desc' },
+          include: { parameterDefinitions: true },
+        },
+      },
+      orderBy: { commonName: 'asc' },
+    });
+  }
+
+  async getCatalogForAdmin(catalogId: string) {
+    const catalog = await this.prisma.plantCatalog.findUnique({
+      where: { id: catalogId },
+      include: {
+        versions: {
+          orderBy: { version: 'desc' },
+          include: { parameterDefinitions: true },
+        },
+      },
+    });
+    if (!catalog) throw new NotFoundException('Plant catalog not found');
+    return catalog;
+  }
+
   async getCatalog(catalogId: string) {
     const catalog = await this.prisma.plantCatalog.findFirst({
       where: { id: catalogId, status: 'ACTIVE', versions: { some: { status: PlantVersionStatus.PUBLISHED } } },

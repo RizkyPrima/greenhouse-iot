@@ -64,3 +64,27 @@ describe('PlantsService tenant access', () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 });
+
+describe('PlantsService platform catalog reads', () => {
+  it('includes unpublished catalogs and every version for guarded admin listing', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const service = new PlantsService({ plantCatalog: { findMany } } as never, {} as never);
+
+    await expect(service.listCatalogForAdmin()).resolves.toEqual([]);
+    expect(findMany).toHaveBeenCalledWith({
+      include: { versions: { orderBy: { version: 'desc' }, include: { parameterDefinitions: true } } },
+      orderBy: { commonName: 'asc' },
+    });
+  });
+
+  it('loads the requested catalog including drafts for guarded admin detail', async () => {
+    const findUnique = vi.fn().mockResolvedValue({ id: 'catalog-1', versions: [{ status: 'DRAFT' }] });
+    const service = new PlantsService({ plantCatalog: { findUnique } } as never, {} as never);
+
+    await expect(service.getCatalogForAdmin('catalog-1')).resolves.toMatchObject({ id: 'catalog-1' });
+    expect(findUnique).toHaveBeenCalledWith({
+      where: { id: 'catalog-1' },
+      include: { versions: { orderBy: { version: 'desc' }, include: { parameterDefinitions: true } } },
+    });
+  });
+});

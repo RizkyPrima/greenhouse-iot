@@ -261,6 +261,15 @@ export class AuthService {
     };
   }
 
+  async capabilities(userId: string) {
+    const grant = await this.prisma.platformAdminGrant.findFirst({
+      where: { userId, permission: 'PLANT_CATALOG_ADMIN', revokedAt: null },
+      select: { id: true },
+    });
+
+    return { data: { capabilities: { plantCatalogAdmin: Boolean(grant) } } };
+  }
+
   private membershipInclude() {
     return {
       select: {

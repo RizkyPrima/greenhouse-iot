@@ -31,6 +31,18 @@ export class PlantsController {
     return this.plants.listCatalog();
   }
 
+  @Get('plant-catalog/admin')
+  @UseGuards(PlatformAdminGuard)
+  listCatalogForAdmin() {
+    return this.plants.listCatalogForAdmin();
+  }
+
+  @Get('plant-catalog/admin/:catalogId')
+  @UseGuards(PlatformAdminGuard)
+  getCatalogForAdmin(@Param('catalogId') catalogId: string) {
+    return this.plants.getCatalogForAdmin(catalogId);
+  }
+
   @Get('plant-catalog/:catalogId')
   getCatalog(@Param('catalogId') catalogId: string) {
     return this.plants.getCatalog(catalogId);

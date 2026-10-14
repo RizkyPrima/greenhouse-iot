@@ -20,6 +20,7 @@ const navigationItems = [
   { name: 'Devices', href: '/devices', icon: Cpu },
   { name: 'Realtime Feed', href: '/realtime', icon: Activity, badge: 'LIVE' },
   { name: 'Historical Data', href: '/history', icon: History },
+  { name: 'Plant Catalog', href: '/plant-catalog', icon: Leaf },
   { name: 'Settings & Access', href: '/settings', icon: Settings },
 ];
 

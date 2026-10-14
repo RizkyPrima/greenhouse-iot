@@ -1,6 +1,6 @@
 # Greenhouse IoT Platform
 
-Smart Greenhouse IoT & Intelligence Platform — Phase 1: Infrastructure
+Smart Greenhouse IoT & Intelligence Platform — Phase 10: Plant Standardization (In Progress)
 
 ## Architecture
 
@@ -11,7 +11,7 @@ ESP32-S3 Controller
         ↓
       EMQX
         ↓
-   Backend API (Phase 2)
+   Backend API
         ↓
  ┌──────┼─────────┐
  ↓      ↓         ↓
@@ -64,17 +64,17 @@ greenhouse-iot/
 ├── infrastructure/
 │   ├── emqx/
 │   │   ├── emqx.conf        # EMQX override config
-│   │   └── acl.conf         # EMQX ACL rules (Phase 5)
+│   │   └── acl.conf         # EMQX ACL rules
 │   └── postgres/
 │       └── init/
 │           └── 01_init.sql  # DB init (extensions)
 │
-├── apps/                    # (Phase 2+)
+├── apps/
 │   ├── api/                 # NestJS backend
 │   ├── web/                 # Next.js frontend
 │   └── ai/                  # Python FastAPI AI service
 │
-├── packages/                # (Phase 2+)
+├── packages/
 │   ├── types/
 │   ├── config/
 │   └── validation/
@@ -91,10 +91,6 @@ greenhouse-iot/
 
 ## Implementation Phases
 
-- [x] **Phase 1** — Infrastructure (EMQX, PostgreSQL, Redis)
-- [ ] **Phase 2** — Backend Foundation (NestJS, Prisma)
-- [ ] **Phase 3** — Authentication (JWT, RBAC)
-- [ ] **Phase 4** — Greenhouse Management
-- [ ] **Phase 5** — MQTT Integration
-- [ ] **Phase 6** — Web Dashboard
-- [ ] **Phase 7** — AI Analytics
+- [x] **Phases 1–8** — Completed
+- [ ] **Phase 9** — Skipped
+- [ ] **Phase 10** — In progress: Plant Standardization

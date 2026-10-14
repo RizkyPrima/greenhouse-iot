@@ -4,7 +4,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { ConnectionStatus, RealtimeDeviceState } from '@/types';
 import { socketManager } from '@/lib/socket';
 
-interface TelemetryUpdatePacket {
+export interface TelemetryUpdatePacket {
   greenhouseId: string;
   deviceMqttId: string;
   payload: {
@@ -22,10 +22,24 @@ interface StatusUpdatePacket {
   lastSeenAt: string;
 }
 
+export interface ActuatorCommandUpdate {
+  commandId: string;
+  deviceMqttId: string;
+  actuatorId: string | null;
+  target: string;
+  value: unknown;
+  status: string;
+  result?: { activeState?: boolean } | null;
+  error?: string | null;
+  completedAt?: string | null;
+}
+
 interface SocketContextType {
   status: ConnectionStatus;
   deviceStates: Record<string, RealtimeDeviceState>;
   lastUpdate: string | null;
+  latestTelemetry: TelemetryUpdatePacket | null;
+  latestCommandUpdate: ActuatorCommandUpdate | null;
   subscribeGreenhouse: (greenhouseId: string) => void;
   unsubscribeGreenhouse: (greenhouseId: string) => void;
   subscribeDevice: (deviceMqttId: string) => void;
@@ -39,6 +53,8 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<ConnectionStatus>('DISCONNECTED');
   const [deviceStates, setDeviceStates] = useState<Record<string, RealtimeDeviceState>>({});
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
+  const [latestTelemetry, setLatestTelemetry] = useState<TelemetryUpdatePacket | null>(null);
+  const [latestCommandUpdate, setLatestCommandUpdate] = useState<ActuatorCommandUpdate | null>(null);
   const subscribedGreenhouses = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -49,6 +65,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     const socket = socketManager.connect();
 
     const handleTelemetry = (packet: TelemetryUpdatePacket) => {
+      setLatestTelemetry(packet);
       setLastUpdate(new Date().toISOString());
       setDeviceStates((prev) => {
         const existing = prev[packet.deviceMqttId] ?? {
@@ -92,6 +109,8 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       setLastUpdate(new Date().toISOString());
       setDeviceStates((prev) => {
         const existing = prev[packet.deviceMqttId];
+        const updatedSensors = existing ? { ...existing.sensors } : {};
+
         if (!existing) {
           return {
             ...prev,
@@ -101,7 +120,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
               status: packet.status,
               lastSeenAt: packet.lastSeenAt,
               lastTelemetryAt: null,
-              sensors: {},
+              sensors: updatedSensors,
             },
           };
         }
@@ -111,22 +130,34 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
             ...existing,
             status: packet.status,
             lastSeenAt: packet.lastSeenAt,
+            sensors: updatedSensors,
           },
         };
       });
     };
 
+    const handleConnect = () => {
+      subscribedGreenhouses.current.forEach((ghId) => {
+        socketManager.subscribeGreenhouse(ghId);
+      });
+    };
+
+    socket.on('connect', handleConnect);
     socket.on('telemetry:update', handleTelemetry);
     socket.on('telemetry:broadcast', handleTelemetry);
     socket.on('status:update', handleStatus);
     socket.on('status:broadcast', handleStatus);
+    const handleCommandUpdate = (packet: ActuatorCommandUpdate) => setLatestCommandUpdate(packet);
+    socket.on('actuator:command:update', handleCommandUpdate);
 
     return () => {
       unsubscribeStatus();
+      socket.off('connect', handleConnect);
       socket.off('telemetry:update', handleTelemetry);
       socket.off('telemetry:broadcast', handleTelemetry);
       socket.off('status:update', handleStatus);
       socket.off('status:broadcast', handleStatus);
+      socket.off('actuator:command:update', handleCommandUpdate);
     };
   }, []);
 
@@ -134,9 +165,11 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     setDeviceStates((prev) => {
       const next = { ...prev };
       for (const s of states) {
+        const sensors = { ...s.sensors };
         next[s.deviceMqttId] = {
           ...next[s.deviceMqttId],
           ...s,
+          sensors,
         };
       }
       return next;
@@ -170,6 +203,8 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         status,
         deviceStates,
         lastUpdate,
+        latestTelemetry,
+        latestCommandUpdate,
         subscribeGreenhouse,
         unsubscribeGreenhouse,
         subscribeDevice,

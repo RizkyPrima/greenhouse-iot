@@ -17,6 +17,8 @@ import {
   PlusCircle,
   Users,
   UserCheck,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 type OrgAction = 'create' | 'join' | 'none';
@@ -29,6 +31,8 @@ export default function RegisterPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   // Organization mode states
   const [orgAction, setOrgAction] = useState<OrgAction>('create');
@@ -111,41 +115,41 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center px-4 py-12 relative overflow-hidden">
+    <div className="auth-page auth-register-page relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-[radial-gradient(ellipse_at_top,_#064e3b_0%,_#020617_42%,_#020617_100%)] px-4 py-8 sm:px-6 sm:py-12">
       {/* Background glow accents */}
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-10 right-10 w-80 h-80 bg-teal-500/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="auth-glow pointer-events-none absolute -left-32 top-1/4 h-96 w-96 rounded-full bg-emerald-500/10 blur-3xl" />
+      <div className="auth-glow pointer-events-none absolute -bottom-32 -right-20 h-96 w-96 rounded-full bg-teal-500/10 blur-3xl" />
 
-      <div className="w-full max-w-xl relative z-10">
+      <main className="relative z-10 w-full max-w-2xl">
         {/* Brand header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex h-14 w-14 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 items-center justify-center shadow-xl shadow-emerald-950/60 mb-4 border border-emerald-400/30">
-            <Leaf className="h-7 w-7 text-white" />
+        <div className="mb-8 text-center">
+          <div className="mb-5 inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-300/20 bg-emerald-400/10 shadow-lg shadow-emerald-950/30">
+            <Leaf className="h-7 w-7 text-emerald-300" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-white font-mono">
-            CREATE ACCOUNT
-          </h1>
-          <p className="text-xs font-mono text-emerald-400 mt-1 uppercase tracking-widest">
-            Greenhouse IoT Access Portal
+          <p className="auth-brand text-xs font-semibold uppercase tracking-[0.24em] text-emerald-300">
+            Greenhouse IoT
           </p>
-          <p className="text-sm text-slate-400 mt-2">
-            Register your operator or organization profile to monitor telemetry
+          <h1 className="auth-title mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+            Buat akun Anda
+          </h1>
+          <p className="auth-subtitle mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-400">
+            Siapkan akses operator dan workspace untuk memantau greenhouse Anda.
           </p>
         </div>
 
         {/* Card */}
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/80 backdrop-blur-xl p-8 shadow-2xl">
+        <div className="auth-card rounded-3xl border border-white/10 bg-slate-900/80 p-5 shadow-2xl shadow-black/30 backdrop-blur-xl sm:p-8">
           {error && (
-            <div className="mb-6 rounded-xl border border-rose-500/40 bg-rose-950/50 p-4 text-xs text-rose-300 flex items-start gap-3 animate-in fade-in">
+            <div role="alert" className="mb-6 flex items-start gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">
               <AlertCircle className="h-4 w-4 text-rose-400 flex-shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>
           )}
 
           {isSuccess && (
-            <div className="mb-6 rounded-xl border border-emerald-500/40 bg-emerald-950/50 p-4 text-xs text-emerald-300 flex items-start gap-3">
+            <div role="status" className="mb-6 flex items-start gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-200">
               <CheckCircle2 className="h-4 w-4 text-emerald-400 flex-shrink-0 mt-0.5" />
-              <span>Registration successful! Directing to dashboard...</span>
+              <span>Pendaftaran berhasil. Mengalihkan ke dashboard...</span>
             </div>
           )}
 
@@ -153,8 +157,8 @@ export default function RegisterPage() {
             {/* User Profile Info */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-medium text-slate-300 uppercase tracking-wider mb-1.5">
-                  Full Name
+                <label htmlFor="register-name" className="auth-label mb-2 block text-sm font-medium text-slate-200">
+                  Nama lengkap
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
@@ -162,18 +166,20 @@ export default function RegisterPage() {
                   </div>
                   <input
                     type="text"
+                    id="register-name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="Jane Doe"
                     required
-                    className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-700 bg-slate-950/60 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors font-mono"
+                    autoComplete="name"
+                    className="auth-input w-full rounded-xl border border-slate-700/80 bg-slate-950/70 py-3 pl-10 pr-4 text-sm text-white placeholder-slate-500 transition-colors focus:border-emerald-400 focus:outline-none focus:ring-4 focus:ring-emerald-500/10"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 uppercase tracking-wider mb-1.5">
-                  Email Address
+                <label htmlFor="register-email" className="auth-label mb-2 block text-sm font-medium text-slate-200">
+                  Alamat email
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
@@ -181,11 +187,13 @@ export default function RegisterPage() {
                   </div>
                   <input
                     type="email"
+                    id="register-email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="operator@greenhouse.internal"
                     required
-                    className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-700 bg-slate-950/60 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors font-mono"
+                    autoComplete="email"
+                    className="auth-input w-full rounded-xl border border-slate-700/80 bg-slate-950/70 py-3 pl-10 pr-4 text-sm text-white placeholder-slate-500 transition-colors focus:border-emerald-400 focus:outline-none focus:ring-4 focus:ring-emerald-500/10"
                   />
                 </div>
               </div>
@@ -194,53 +202,75 @@ export default function RegisterPage() {
             {/* Password and Confirm */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-medium text-slate-300 uppercase tracking-wider mb-1.5">
-                  Password
+                <label htmlFor="register-password" className="auth-label mb-2 block text-sm font-medium text-slate-200">
+                  Kata sandi
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
                     <Lock className="h-4 w-4" />
                   </div>
                   <input
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
+                    id="register-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••••••"
                     required
                     minLength={8}
-                    className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-700 bg-slate-950/60 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors font-mono"
+                    autoComplete="new-password"
+                    className="auth-input w-full rounded-xl border border-slate-700/80 bg-slate-950/70 py-3 pl-10 pr-12 text-sm text-white placeholder-slate-500 transition-colors focus:border-emerald-400 focus:outline-none focus:ring-4 focus:ring-emerald-500/10"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((visible) => !visible)}
+                    aria-label={showPassword ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}
+                    aria-pressed={showPassword}
+                    className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-500 transition hover:text-emerald-500 focus-visible:rounded-r-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500"
+                  >
+                    {showPassword ? <EyeOff aria-hidden="true" className="h-4 w-4" /> : <Eye aria-hidden="true" className="h-4 w-4" />}
+                  </button>
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 uppercase tracking-wider mb-1.5">
-                  Confirm Password
+                <label htmlFor="register-confirm-password" className="auth-label mb-2 block text-sm font-medium text-slate-200">
+                  Konfirmasi kata sandi
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
                     <Lock className="h-4 w-4" />
                   </div>
                   <input
-                    type="password"
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    id="register-confirm-password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="••••••••••••"
                     required
                     minLength={8}
-                    className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-700 bg-slate-950/60 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors font-mono"
+                    autoComplete="new-password"
+                    className="auth-input w-full rounded-xl border border-slate-700/80 bg-slate-950/70 py-3 pl-10 pr-12 text-sm text-white placeholder-slate-500 transition-colors focus:border-emerald-400 focus:outline-none focus:ring-4 focus:ring-emerald-500/10"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword((visible) => !visible)}
+                    aria-label={showConfirmPassword ? 'Sembunyikan konfirmasi kata sandi' : 'Tampilkan konfirmasi kata sandi'}
+                    aria-pressed={showConfirmPassword}
+                    className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-500 transition hover:text-emerald-500 focus-visible:rounded-r-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500"
+                  >
+                    {showConfirmPassword ? <EyeOff aria-hidden="true" className="h-4 w-4" /> : <Eye aria-hidden="true" className="h-4 w-4" />}
+                  </button>
                 </div>
               </div>
             </div>
 
             {/* Organization Selection Tabs */}
             <div className="pt-4 border-t border-slate-800">
-              <label className="block text-xs font-medium text-slate-300 uppercase tracking-wider mb-2.5">
-                Organization & Workspace Setup
+              <label className="mb-2.5 block text-sm font-medium text-slate-200">
+                Pengaturan organisasi
               </label>
 
-              <div className="grid grid-cols-3 gap-2 p-1 bg-slate-950/80 rounded-xl border border-slate-800">
+              <div className="auth-org-tabs grid grid-cols-3 gap-1.5 rounded-xl border border-white/10 bg-slate-950/80 p-1.5 sm:gap-2">
                 <button
                   type="button"
                   onClick={() => setOrgAction('create')}
@@ -251,7 +281,7 @@ export default function RegisterPage() {
                   }`}
                 >
                   <PlusCircle className="h-3.5 w-3.5" />
-                  <span>Create Org</span>
+                  <span>Buat</span>
                 </button>
                 <button
                   type="button"
@@ -263,7 +293,7 @@ export default function RegisterPage() {
                   }`}
                 >
                   <Users className="h-3.5 w-3.5" />
-                  <span>Join Org</span>
+                  <span>Gabung</span>
                 </button>
                 <button
                   type="button"
@@ -275,15 +305,15 @@ export default function RegisterPage() {
                   }`}
                 >
                   <UserCheck className="h-3.5 w-3.5" />
-                  <span>Standalone</span>
+                  <span>Mandiri</span>
                 </button>
               </div>
 
               {/* Mode Details */}
-              <div className="mt-3.5 p-4 rounded-xl border border-slate-800/80 bg-slate-950/40 space-y-3">
+              <div className="auth-org-details mt-3.5 space-y-3 rounded-xl border border-slate-800/80 bg-slate-950/40 p-4">
                 {orgAction === 'create' && (
                   <>
-                    <div className="flex items-center justify-between text-[11px] text-slate-400">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
                       <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
                         <ShieldCheck className="h-3.5 w-3.5" />
                         Role Granted: OWNER
@@ -325,7 +355,7 @@ export default function RegisterPage() {
 
                 {orgAction === 'join' && (
                   <>
-                    <div className="flex items-center justify-between text-[11px] text-slate-400">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
                       <span className="flex items-center gap-1.5 text-teal-400 font-medium">
                         <ShieldCheck className="h-3.5 w-3.5" />
                         Initial Role: VIEWER
@@ -388,21 +418,21 @@ export default function RegisterPage() {
             <button
               type="submit"
               disabled={isSubmitting || isSuccess}
-              className="w-full mt-6 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-sm font-semibold tracking-wide transition-all shadow-lg shadow-emerald-950/50 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              className="auth-primary-button mt-6 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-3.5 text-sm font-semibold text-slate-950 shadow-lg shadow-emerald-950/30 transition hover:bg-emerald-400 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-400/30 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSubmitting ? (
                 <>
                   <div className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                  <span>Creating Account...</span>
+                  <span>Membuat akun...</span>
                 </>
               ) : isSuccess ? (
                 <>
                   <CheckCircle2 className="h-4 w-4" />
-                  <span>Success! Redirecting...</span>
+                  <span>Berhasil! Mengalihkan...</span>
                 </>
               ) : (
                 <>
-                  <span>Create Account</span>
+                  <span>Buat akun</span>
                   <ArrowRight className="h-4 w-4" />
                 </>
               )}
@@ -410,23 +440,23 @@ export default function RegisterPage() {
           </form>
 
           {/* Link to Login */}
-          <div className="mt-6 pt-5 border-t border-slate-800 text-center">
-            <p className="text-xs text-slate-400">
-              Already have an account?{' '}
+          <div className="mt-6 border-t border-white/10 pt-5 text-center">
+            <p className="text-sm text-slate-400">
+              Sudah punya akun?{' '}
               <Link
                 href="/login"
-                className="font-medium text-emerald-400 hover:text-emerald-300 underline underline-offset-4 transition-colors"
+                className="font-semibold text-emerald-300 transition hover:text-emerald-200 focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
               >
-                Sign in to Dashboard
+                Masuk ke dashboard
               </Link>
             </p>
           </div>
         </div>
 
-        <div className="mt-6 text-center text-xs font-mono text-slate-500">
-          Backend API: {process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'}
+        <div className="mt-6 text-center text-xs text-slate-500">
+          Akses aman untuk operasional greenhouse Anda
         </div>
-      </div>
+      </main>
     </div>
   );
 }

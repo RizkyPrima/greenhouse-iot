@@ -22,10 +22,12 @@ import {
 import Link from 'next/link';
 import { DeviceStatusBadge, GreenhouseStatusBadge } from '@/components/common/status-badge';
 import { SkeletonCard, SkeletonTable } from '@/components/common/empty-state';
+import { useStatusClock } from '@/hooks/use-status-clock';
 
 export default function DashboardOverviewPage() {
   const { currentOrg } = useAuth();
   const { deviceStates, seedDeviceStates, subscribeGreenhouse } = useSocket();
+  const now = useStatusClock();
 
   // Fetch greenhouses
   const { data: greenhouses = [], isLoading: isLoadingGH } = useQuery({
@@ -39,22 +41,23 @@ export default function DashboardOverviewPage() {
     queryFn: () => apiClient.getDevices(currentOrg?.id),
   });
 
-  // Fetch realtime state for all greenhouses from Redis (zero-latency seed)
+  // Fetch realtime state by device MQTT ID so the dashboard does not depend on
+  // greenhouse topic IDs matching database IDs or codes.
   useEffect(() => {
-    if (greenhouses.length > 0) {
-      for (const gh of greenhouses) {
-        subscribeGreenhouse(gh.id);
-        void apiClient
-          .getGreenhouseRealtime(gh.id)
-          .then((res) => {
-            if (res.devices) {
-              seedDeviceStates(res.devices);
-            }
-          })
-          .catch(() => {});
-      }
+    for (const greenhouse of greenhouses) {
+      subscribeGreenhouse(greenhouse.code);
     }
-  }, [greenhouses, seedDeviceStates, subscribeGreenhouse]);
+
+    if (devices.length > 0) {
+      void Promise.all(
+        devices.map((device) => apiClient.getDeviceRealtime(device.deviceId)),
+      ).then((responses) => {
+        seedDeviceStates(
+          responses.flatMap((response) => response.data ? [response.data] : []),
+        );
+      }).catch(() => {});
+    }
+  }, [greenhouses, devices, seedDeviceStates, subscribeGreenhouse]);
 
   // Aggregate stats using live deviceStates if available, fallback to devices table
   const stats = useMemo(() => {
@@ -77,27 +80,28 @@ export default function DashboardOverviewPage() {
       const lastSeen = liveState?.lastSeenAt ?? dev.lastSeenAt;
 
       // Status rule: <=15s ONLINE, >15s & <=30s STALE, >30s OFFLINE
+      let isDevOnline = false;
       if (lastSeen) {
-        const diffSecs = (Date.now() - new Date(lastSeen).getTime()) / 1000;
-        if (diffSecs <= 15) onlineCount++;
-        else if (diffSecs <= 30) staleCount++;
+        const diffSecs = (now - new Date(lastSeen).getTime()) / 1000;
+        if (diffSecs <= 15) { onlineCount++; isDevOnline = true; }
+        else if (diffSecs <= 30) { staleCount++; isDevOnline = true; }
         else offlineCount++;
       } else {
         offlineCount++;
       }
 
-      // Check sensors in liveState
-      if (liveState?.sensors) {
+      // Only aggregate sensor values when device is online / stale (not offline)
+      if (isDevOnline && liveState?.sensors) {
         for (const [code, sensor] of Object.entries(liveState.sensors)) {
           const val = sensor.numericValue;
-          if (typeof val === 'number') {
-            if (code === 'temp_air' || code.includes('temp')) {
+          if (typeof val === 'number' && val > 0) {
+            if (code === 'temp_air' || (code.includes('temp') && !code.includes('soil'))) {
               totalTemp += val;
               tempCount++;
             } else if (code === 'humidity' || code.includes('hum')) {
               totalHum += val;
               humCount++;
-            } else if (code === 'soil_moisture' || code.includes('soil')) {
+            } else if (code === 'soil_moisture' || (code.includes('soil') && !code.includes('temp'))) {
               totalSoil += val;
               soilCount++;
             }
@@ -129,7 +133,7 @@ export default function DashboardOverviewPage() {
       avgSoil,
       activeActuators,
     };
-  }, [greenhouses, devices, deviceStates]);
+  }, [greenhouses, devices, deviceStates, now]);
 
   return (
     <DashboardLayout>
@@ -347,6 +351,7 @@ export default function DashboardOverviewPage() {
                             <DeviceStatusBadge
                               status={live?.status ?? dev.status}
                               lastSeenAt={live?.lastSeenAt ?? dev.lastSeenAt}
+                              now={now}
                             />
                           </td>
                         </tr>

@@ -15,23 +15,75 @@ export class TelemetryPersistenceService {
 
   /**
    * Resolve the internal DB Device.id from the MQTT deviceId string.
-   * Returns null if the device is not registered in the DB.
+   * Auto-provisions the device under matching or default greenhouse if not found.
    */
-  async resolveDevice(deviceMqttId: string): Promise<{ id: string; greenhouseId: string } | null> {
-    const device = await this.prisma.device.findFirst({
+  async resolveDevice(
+    deviceMqttId: string,
+    topicGreenhouseId?: string,
+  ): Promise<{ id: string; greenhouseId: string } | null> {
+    const existing = await this.prisma.device.findFirst({
       where: { deviceId: deviceMqttId, deletedAt: null },
       select: { id: true, greenhouseId: true },
     });
-    return device;
+    if (existing) {
+      return existing;
+    }
+
+    try {
+      let gh = topicGreenhouseId
+        ? await this.prisma.greenhouse.findFirst({
+            where: {
+              OR: [{ id: topicGreenhouseId }, { code: topicGreenhouseId }],
+              deletedAt: null,
+            },
+          })
+        : null;
+
+      if (!gh) {
+        gh = await this.prisma.greenhouse.findFirst({
+          where: { deletedAt: null },
+          orderBy: { createdAt: 'asc' },
+        });
+      }
+
+      if (!gh) {
+        this.logger.warn(`[AUTO_PROVISION_FAILED] No active greenhouse found for device ${deviceMqttId}`);
+        return null;
+      }
+
+      const created = await this.prisma.device.create({
+        data: {
+          greenhouseId: gh.id,
+          deviceId: deviceMqttId,
+          name: `ESP32-S3 (${deviceMqttId})`,
+          deviceType: 'ESP32-S3-N16R8',
+          hardwareVersion: 'N16R8',
+          firmwareVersion: '1.0.0',
+          status: DeviceStatus.ONLINE,
+          lastSeenAt: new Date(),
+        },
+        select: { id: true, greenhouseId: true },
+      });
+
+      this.logger.log(
+        `[AUTO_PROVISION_DEVICE] Created device "${created.id}" (${deviceMqttId}) in greenhouse "${gh.name}" (${gh.code})`,
+      );
+      return created;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`[AUTO_PROVISION_DEVICE_ERROR] Failed for ${deviceMqttId}: ${msg}`);
+      return null;
+    }
   }
 
   /**
    * Resolve sensor IDs by code for a given device.
-   * Returns a map: sensorCode -> { id, unit }
+   * Auto-provisions missing sensors if they don't exist yet.
    */
   async resolveSensors(
     deviceDbId: string,
     codes: string[],
+    rawReadings?: SensorReading[],
   ): Promise<Map<string, { id: string; unit: string | null }>> {
     const sensors = await this.prisma.sensor.findMany({
       where: {
@@ -42,6 +94,31 @@ export class TelemetryPersistenceService {
       },
       select: { id: true, code: true, unit: true },
     });
+
+    const existingCodes = new Set(sensors.map((s) => s.code));
+    for (const code of codes) {
+      if (!existingCodes.has(code)) {
+        try {
+          const raw = rawReadings?.find((r) => r.code === code);
+          const name = code.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+          const created = await this.prisma.sensor.create({
+            data: {
+              deviceId: deviceDbId,
+              code,
+              name,
+              sensorType: 'ANALOG_DIGITAL',
+              unit: raw?.unit ?? null,
+              enabled: true,
+            },
+            select: { id: true, code: true, unit: true },
+          });
+          sensors.push(created);
+          this.logger.log(`[AUTO_PROVISION_SENSOR] Created sensor "${code}" for device "${deviceDbId}"`);
+        } catch {
+          // Ignore unique race condition
+        }
+      }
+    }
 
     const map = new Map<string, { id: string; unit: string | null }>();
     for (const s of sensors) {

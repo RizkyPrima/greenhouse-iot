@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { DashboardLayout } from '@/components/layout/dashboard-layout';
 import { apiClient } from '@/lib/api-client';
@@ -10,10 +10,12 @@ import { DeviceStatusBadge } from '@/components/common/status-badge';
 import { SkeletonTable, EmptyState } from '@/components/common/empty-state';
 import { Device, Sensor, Actuator } from '@/types';
 import { Cpu, Activity, Zap, RefreshCw, X } from 'lucide-react';
+import { useStatusClock } from '@/hooks/use-status-clock';
 
 export default function DevicesPage() {
   const { currentOrg } = useAuth();
-  const { deviceStates } = useSocket();
+  const { deviceStates, seedDeviceStates, subscribeGreenhouse } = useSocket();
+  const now = useStatusClock();
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
 
   // Fetch all devices
@@ -27,6 +29,17 @@ export default function DevicesPage() {
     queryKey: ['greenhouses', currentOrg?.id],
     queryFn: () => apiClient.getGreenhouses(currentOrg?.id),
   });
+
+  // Hydrate the realtime snapshot when this page is opened; socket events only
+  // contain readings received after subscribing.
+  useEffect(() => {
+    for (const greenhouse of greenhouses) {
+      subscribeGreenhouse(greenhouse.code);
+      void apiClient.getGreenhouseRealtime(greenhouse.code)
+        .then((res) => seedDeviceStates(res.devices ?? []))
+        .catch(() => {});
+    }
+  }, [greenhouses, seedDeviceStates, subscribeGreenhouse]);
 
   // Fetch sensors for selected device
   const { data: deviceSensors = [], isLoading: isLoadingSensors } = useQuery({
@@ -135,6 +148,7 @@ export default function DevicesPage() {
                           <DeviceStatusBadge
                             status={live?.status ?? dev.status}
                             lastSeenAt={effectiveLastSeen}
+                            now={now}
                           />
                         </td>
                         <td className="py-4 px-6 font-mono text-slate-400">
@@ -193,6 +207,7 @@ export default function DevicesPage() {
                     <DeviceStatusBadge
                       status={deviceStates[selectedDevice.deviceId]?.status ?? selectedDevice.status}
                       lastSeenAt={deviceStates[selectedDevice.deviceId]?.lastSeenAt ?? selectedDevice.lastSeenAt}
+                      now={now}
                     />
                   </div>
                 </div>

@@ -3,12 +3,13 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/context/auth-context';
-import { Leaf, Lock, Mail, AlertCircle, ArrowRight } from 'lucide-react';
+import { Leaf, Lock, Mail, AlertCircle, ArrowRight, Eye, EyeOff } from 'lucide-react';
 
 export default function LoginPage() {
   const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -38,32 +39,32 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center px-4 py-12 relative overflow-hidden">
+    <div className="auth-page relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-[radial-gradient(ellipse_at_top,_#064e3b_0%,_#020617_42%,_#020617_100%)] px-4 py-10 sm:px-6">
       {/* Background glow accents */}
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-10 right-10 w-80 h-80 bg-teal-500/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="auth-glow pointer-events-none absolute -left-32 top-1/4 h-96 w-96 rounded-full bg-emerald-500/10 blur-3xl" />
+      <div className="auth-glow pointer-events-none absolute -bottom-32 -right-20 h-96 w-96 rounded-full bg-teal-500/10 blur-3xl" />
 
-      <div className="w-full max-w-md relative z-10">
+      <main className="relative z-10 w-full max-w-md">
         {/* Brand header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex h-14 w-14 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 items-center justify-center shadow-xl shadow-emerald-950/60 mb-4 border border-emerald-400/30">
-            <Leaf className="h-7 w-7 text-white" />
+        <div className="mb-8 text-center">
+          <div className="mb-5 inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-300/20 bg-emerald-400/10 shadow-lg shadow-emerald-950/30">
+            <Leaf className="h-7 w-7 text-emerald-300" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-white font-mono">
-            GREENHOUSE IOT
-          </h1>
-          <p className="text-xs font-mono text-emerald-400 mt-1 uppercase tracking-widest">
-            Phase 7 Industrial Dashboard
+          <p className="auth-brand text-xs font-semibold uppercase tracking-[0.24em] text-emerald-300">
+            Greenhouse IoT
           </p>
-          <p className="text-sm text-slate-400 mt-2">
-            Low-latency telemetry monitoring and environmental control
+          <h1 className="auth-title mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+            Selamat datang kembali
+          </h1>
+          <p className="auth-subtitle mt-2 text-sm leading-6 text-slate-400">
+            Masuk untuk memantau kondisi greenhouse dan mengelola perangkat Anda.
           </p>
         </div>
 
         {/* Card */}
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/80 backdrop-blur-xl p-8 shadow-2xl">
+        <div className="auth-card rounded-3xl border border-white/10 bg-slate-900/80 p-5 shadow-2xl shadow-black/30 backdrop-blur-xl sm:p-8">
           {error && (
-            <div className="mb-6 rounded-xl border border-rose-500/40 bg-rose-950/50 p-4 text-xs text-rose-300 flex items-start gap-3">
+            <div role="alert" className="mb-6 flex items-start gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">
               <AlertCircle className="h-4 w-4 text-rose-400 flex-shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>
@@ -71,8 +72,8 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-slate-300 uppercase tracking-wider mb-1.5">
-                Email Address
+              <label htmlFor="login-email" className="auth-label mb-2 block text-sm font-medium text-slate-200">
+                Alamat email
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
@@ -80,47 +81,60 @@ export default function LoginPage() {
                 </div>
                 <input
                   type="email"
+                  id="login-email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="operator@greenhouse.internal"
                   required
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-700 bg-slate-950/60 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors font-mono"
+                  autoComplete="email"
+                  className="auth-input w-full rounded-xl border border-slate-700/80 bg-slate-950/70 py-3 pl-10 pr-4 text-sm text-white placeholder-slate-500 transition-colors focus:border-emerald-400 focus:outline-none focus:ring-4 focus:ring-emerald-500/10"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-300 uppercase tracking-wider mb-1.5">
-                Password
+              <label htmlFor="login-password" className="auth-label mb-2 block text-sm font-medium text-slate-200">
+                Kata sandi
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
                   <Lock className="h-4 w-4" />
                 </div>
                 <input
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
+                  id="login-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
                   required
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-700 bg-slate-950/60 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors font-mono"
+                  autoComplete="current-password"
+                  className="auth-input w-full rounded-xl border border-slate-700/80 bg-slate-950/70 py-3 pl-10 pr-12 text-sm text-white placeholder-slate-500 transition-colors focus:border-emerald-400 focus:outline-none focus:ring-4 focus:ring-emerald-500/10"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((visible) => !visible)}
+                  aria-label={showPassword ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}
+                  aria-pressed={showPassword}
+                  className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-500 transition hover:text-emerald-500 focus-visible:rounded-r-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500"
+                >
+                  {showPassword ? <EyeOff aria-hidden="true" className="h-4 w-4" /> : <Eye aria-hidden="true" className="h-4 w-4" />}
+                </button>
               </div>
             </div>
 
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full mt-6 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-sm font-semibold tracking-wide transition-all shadow-lg shadow-emerald-950/50 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              className="auth-primary-button mt-6 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-3.5 text-sm font-semibold text-slate-950 shadow-lg shadow-emerald-950/30 transition hover:bg-emerald-400 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-400/30 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSubmitting ? (
                 <>
                   <div className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                  <span>Authenticating...</span>
+                  <span>Memproses...</span>
                 </>
               ) : (
                 <>
-                  <span>Sign In to Dashboard</span>
+                  <span>Masuk ke dashboard</span>
                   <ArrowRight className="h-4 w-4" />
                 </>
               )}
@@ -128,42 +142,42 @@ export default function LoginPage() {
           </form>
 
           {/* Registration Link */}
-          <div className="mt-6 pt-5 border-t border-slate-800 text-center">
-            <p className="text-xs text-slate-400">
-              Don&apos;t have an account?{' '}
+          <div className="mt-6 border-t border-white/10 pt-5 text-center">
+            <p className="text-sm text-slate-400">
+              Belum punya akun?{' '}
               <Link
                 href="/register"
-                className="font-medium text-emerald-400 hover:text-emerald-300 underline underline-offset-4 transition-colors"
+                className="font-semibold text-emerald-300 transition hover:text-emerald-200 focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
               >
-                Create an account
+                Buat akun
               </Link>
             </p>
           </div>
 
           {/* Quick Demo Pre-fill */}
-          <div className="mt-6 pt-5 border-t border-slate-800/60 text-center">
-            <span className="text-[11px] font-mono text-slate-400 block mb-2 uppercase tracking-wider">
-              Quick Fill Demo Credentials
+          <div className="mt-5 border-t border-white/5 pt-5 text-center">
+            <span className="mb-3 block text-xs text-slate-500">
+              Akses cepat untuk demo
             </span>
             <div className="flex flex-wrap gap-2 justify-center">
               <button
                 type="button"
                 onClick={() => handleDemoFill('owner@example.com', 'Password123!')}
-                className="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-[11px] font-mono text-slate-300 border border-slate-700 transition-colors"
+                className="rounded-lg border border-slate-700/80 bg-slate-800/60 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-emerald-500/40 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
               >
                 Owner
               </button>
               <button
                 type="button"
                 onClick={() => handleDemoFill('operator@example.com', 'Password123!')}
-                className="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-[11px] font-mono text-slate-300 border border-slate-700 transition-colors"
+                className="rounded-lg border border-slate-700/80 bg-slate-800/60 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-emerald-500/40 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
               >
                 Operator
               </button>
               <button
                 type="button"
                 onClick={() => handleDemoFill('viewer@example.com', 'Password123!')}
-                className="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-[11px] font-mono text-slate-300 border border-slate-700 transition-colors"
+                className="rounded-lg border border-slate-700/80 bg-slate-800/60 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-emerald-500/40 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
               >
                 Viewer
               </button>
@@ -171,10 +185,10 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <div className="mt-6 text-center text-xs font-mono text-slate-400">
-          Backend API: {process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'}
+        <div className="mt-6 text-center text-xs text-slate-500">
+          Akses aman untuk operasional greenhouse Anda
         </div>
-      </div>
+      </main>
     </div>
   );
 }

@@ -22,9 +22,11 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { EmptyState } from '@/components/common/empty-state';
+import { useStatusClock } from '@/hooks/use-status-clock';
 
 export default function HistoryPage() {
   const { currentOrg } = useAuth();
+  const now = useStatusClock(15_000);
 
   // Filters
   const [selectedGreenhouseId, setSelectedGreenhouseId] = useState<string>('');
@@ -36,13 +38,13 @@ export default function HistoryPage() {
   // Fetch greenhouses
   const { data: greenhouses = [] } = useQuery({
     queryKey: ['greenhouses', currentOrg?.id],
-    queryFn: () => apiClient.getGreenhouses(),
+    queryFn: () => apiClient.getGreenhouses(currentOrg?.id),
   });
 
   // Fetch devices
   const { data: devices = [] } = useQuery({
     queryKey: ['devices', currentOrg?.id],
-    queryFn: () => apiClient.getDevices(),
+    queryFn: () => apiClient.getDevices(currentOrg?.id),
   });
 
   // Filter devices based on greenhouse
@@ -67,7 +69,7 @@ export default function HistoryPage() {
     else if (timeRange === '24h') from.setHours(to.getHours() - 24);
     else if (timeRange === '7d') from.setDate(to.getDate() - 7);
     return { fromIso: from.toISOString(), toIso: to.toISOString() };
-  }, [timeRange]);
+  }, [timeRange, now]);
 
   // Query historical telemetry from PostgreSQL via API
   const {

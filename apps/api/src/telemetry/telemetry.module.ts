@@ -7,8 +7,11 @@ import { TelemetryController } from './telemetry.controller.js';
 
 import { TelemetryGateway } from './telemetry.gateway.js';
 
+import { JwtModule } from '@nestjs/jwt';
+import { ActuatorsModule } from '../actuators/actuators.module.js';
+
 @Module({
-  imports: [MqttModule],
+  imports: [MqttModule, ActuatorsModule, JwtModule.register({})],
   providers: [
     TelemetryProcessorService,
     TelemetryRealtimeService,

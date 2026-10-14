@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import { User, Organization, UserRole, UserMembership } from '@/types';
 import { apiClient } from '@/lib/api-client';
+import { socketManager } from '@/lib/socket';
 import { useRouter, usePathname } from 'next/navigation';
 
 interface AuthContextType {
@@ -47,6 +48,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setIsLoading(false);
         return;
       }
+
+      socketManager.updateAuthToken(token);
 
       const res = await apiClient.getMe();
       const userData = res.data.user;
@@ -196,6 +199,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (typeof window !== 'undefined') {
         localStorage.removeItem('greenhouse_selected_org');
       }
+      socketManager.updateAuthToken(apiClient.getAccessToken());
       await loadUserData();
       router.push('/dashboard');
     } finally {
@@ -206,6 +210,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = async () => {
     setIsLoading(true);
     try {
+      socketManager.disconnect();
       await apiClient.logout();
       if (typeof window !== 'undefined') {
         localStorage.removeItem('greenhouse_selected_org');

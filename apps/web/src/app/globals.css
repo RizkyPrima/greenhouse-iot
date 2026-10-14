@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #020617;
+  --foreground: #f1f5f9;
 }
 
 @theme inline {
@@ -12,15 +12,137 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root[data-theme='light'] {
+  --background: #f1f5f9;
+  --foreground: #0f172a;
+  --color-slate-950: #f1f5f9;
+  --color-slate-900: #ffffff;
+  --color-slate-800: #e2e8f0;
+  --color-slate-700: #cbd5e1;
+  --color-slate-600: #64748b;
+  --color-slate-500: #475569;
+  --color-slate-400: #475569;
+  --color-slate-300: #334155;
+  --color-slate-200: #1e293b;
+  --color-slate-100: #0f172a;
+  --color-slate-50: #020617;
+  --color-emerald-50: #ecfdf5;
+  --color-emerald-100: #d1fae5;
+  --color-emerald-200: #065f46;
+  --color-emerald-300: #047857;
+  --color-emerald-400: #047857;
+  --color-emerald-800: #a7f3d0;
+  --color-emerald-900: #d1fae5;
+  --color-emerald-950: #ecfdf5;
+  --color-teal-50: #f0fdfa;
+  --color-teal-100: #ccfbf1;
+  --color-teal-300: #0f766e;
+  --color-teal-400: #0f766e;
+  --color-teal-900: #ccfbf1;
+  --color-teal-950: #f0fdfa;
+  --color-cyan-100: #cffafe;
+  --color-cyan-300: #0e7490;
+  --color-cyan-400: #0e7490;
+  --color-cyan-900: #cffafe;
+  --color-blue-100: #dbeafe;
+  --color-blue-300: #1d4ed8;
+  --color-blue-900: #dbeafe;
+  --color-blue-950: #eff6ff;
+  --color-sky-400: #0369a1;
+  --color-blue-400: #1d4ed8;
+  --color-indigo-100: #e0e7ff;
+  --color-indigo-300: #4338ca;
+  --color-indigo-400: #4338ca;
+  --color-indigo-900: #e0e7ff;
+  --color-amber-100: #fef3c7;
+  --color-amber-300: #b45309;
+  --color-amber-400: #b45309;
+  --color-amber-900: #fef3c7;
+  --color-amber-950: #fffbeb;
+  --color-rose-50: #fff1f2;
+  --color-rose-100: #ffe4e6;
+  --color-rose-200: #9f1239;
+  --color-rose-300: #be123c;
+  --color-rose-400: #be123c;
+  --color-rose-900: #ffe4e6;
+  --color-rose-950: #fff1f2;
+  --color-purple-100: #f3e8ff;
+  --color-purple-300: #7e22ce;
+  --color-purple-400: #7e22ce;
+  --color-purple-900: #f3e8ff;
+  --color-purple-950: #faf5ff;
 }
+
+:root[data-theme='light'] .text-white { color: #0f172a; }
+:root[data-theme='light'] button.text-white,
+:root[data-theme='light'] .bg-gradient-to-r.text-white,
+:root[data-theme='light'] .bg-gradient-to-tr.text-white,
+:root[data-theme='light'] .bg-emerald-600.text-white,
+:root[data-theme='light'] .bg-rose-600.text-white { color: #ffffff; }
+:root[data-theme='light'] .bg-gradient-to-tr .text-white { color: #ffffff; }
+
+.theme-switch[aria-checked='true'] { background-color: #273449; }
+.theme-switch-knob { box-shadow: 0 2px 5px rgb(15 23 42 / 35%); }
+
+html, body { min-height: 100%; }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+:root[data-theme='light'] .auth-page {
+  background: radial-gradient(ellipse at top, #d1fae5 0%, #f8fafc 48%, #f1f5f9 100%) !important;
+}
+
+:root[data-theme='light'] .auth-page .auth-glow {
+  opacity: 0.25;
+}
+
+:root[data-theme='light'] .auth-page .auth-title {
+  color: #0f172a !important;
+}
+
+:root[data-theme='light'] .auth-page .auth-subtitle {
+  color: #475569;
+}
+
+:root[data-theme='light'] .auth-page .auth-card {
+  background-color: #fff !important;
+  border-color: #dbe4ee !important;
+  box-shadow: 0 24px 64px rgb(15 23 42 / 12%);
+}
+
+:root[data-theme='light'] .auth-page .auth-label {
+  color: #334155;
+}
+
+:root[data-theme='light'] .auth-page .auth-input {
+  color: #0f172a;
+  background-color: #fff;
+  border-color: #cbd5e1;
+}
+
+:root[data-theme='light'] .auth-page .auth-input::placeholder {
+  color: #64748b;
+}
+
+:root[data-theme='light'] .auth-page .auth-primary-button {
+  color: #fff;
+  background-color: #047857;
+}
+
+:root[data-theme='light'] .auth-page .auth-primary-button:hover {
+  background-color: #065f46;
+}
+
+:root[data-theme='light'] .auth-register-page .auth-org-tabs {
+  background-color: #f1f5f9;
+  border-color: #dbe4ee;
+}
+
+:root[data-theme='light'] .auth-register-page .auth-org-details {
+  background-color: #f8fafc;
+  border-color: #dbe4ee;
 }

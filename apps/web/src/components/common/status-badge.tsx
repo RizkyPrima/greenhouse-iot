@@ -1,7 +1,13 @@
 import React from 'react';
 import { ConnectionStatus, DeviceStatus, GreenhouseStatus, UserRole } from '@/types';
 
-export function ConnectionBadge({ status }: { status: ConnectionStatus }) {
+export function ConnectionBadge({
+  status,
+  labelPrefix,
+}: {
+  status: ConnectionStatus;
+  labelPrefix?: string;
+}) {
   const configs: Record<ConnectionStatus, { bg: string; text: string; dot: string; label: string; ping: boolean }> = {
     CONNECTED: {
       bg: 'bg-emerald-950/60 border-emerald-500/40',
@@ -27,16 +33,20 @@ export function ConnectionBadge({ status }: { status: ConnectionStatus }) {
   };
 
   const cfg = configs[status] || configs.DISCONNECTED;
+  const displayLabel = labelPrefix ? `${labelPrefix}: ${cfg.label}` : cfg.label;
 
   return (
-    <div className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full border text-xs font-mono font-medium tracking-wider ${cfg.bg} ${cfg.text}`}>
+    <div
+      title="Status Stream WebSocket Frontend ke Server"
+      className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full border text-xs font-mono font-medium tracking-wider ${cfg.bg} ${cfg.text}`}
+    >
       <span className="relative flex h-2 w-2">
         {cfg.ping && (
           <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${cfg.dot}`} />
         )}
         <span className={`relative inline-flex rounded-full h-2 w-2 ${cfg.dot}`} />
       </span>
-      <span>{cfg.label}</span>
+      <span>{displayLabel}</span>
     </div>
   );
 }
@@ -44,9 +54,11 @@ export function ConnectionBadge({ status }: { status: ConnectionStatus }) {
 export function DeviceStatusBadge({
   status,
   lastSeenAt,
+  now = Date.now(),
 }: {
   status?: string | DeviceStatus;
   lastSeenAt?: string | null;
+  now?: number;
 }) {
   // Determine status dynamically based on lastSeenAt if available:
   // <= 15 seconds: ONLINE
@@ -55,7 +67,7 @@ export function DeviceStatusBadge({
   let computedStatus: 'ONLINE' | 'STALE' | 'OFFLINE' = 'OFFLINE';
 
   if (lastSeenAt) {
-    const diffSecs = (Date.now() - new Date(lastSeenAt).getTime()) / 1000;
+    const diffSecs = (now - new Date(lastSeenAt).getTime()) / 1000;
     if (diffSecs <= 15) {
       computedStatus = 'ONLINE';
     } else if (diffSecs <= 30) {

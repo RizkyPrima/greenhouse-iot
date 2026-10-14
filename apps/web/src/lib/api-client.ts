@@ -260,6 +260,33 @@ class ApiClient {
     return this.request<Actuator[]>(`/devices/${id}/actuators`);
   }
 
+  async getActuators(): Promise<Actuator[]> {
+    return this.request<Actuator[]>('/actuators');
+  }
+
+  async sendActuatorCommand(actuatorId: string, command: 'ON' | 'OFF') {
+    return this.request<{ commandId: string; status: string }>(`/actuators/${actuatorId}/command`, {
+      method: 'POST',
+      body: JSON.stringify({ command }),
+    });
+  }
+
+  async getActuatorCommand(commandId: string) {
+    return this.request<{
+      commandId: string;
+      actuatorId: string | null;
+      target: string;
+      value: boolean;
+      status: 'PENDING' | 'SENT' | 'ACKNOWLEDGED' | 'EXECUTED' | 'FAILED' | 'TIMEOUT';
+      result?: { activeState?: boolean } | null;
+      error?: string | null;
+    }>(`/actuators/commands/${commandId}`);
+  }
+
+  async getLatestActuatorStates() {
+    return this.request<Array<{ actuatorId: string; activeState: boolean; updatedAt: string }>>('/actuators/states');
+  }
+
   // ── Telemetry Endpoints ──────────────────────────────────────────────────
   async getGreenhouseRealtime(greenhouseId: string): Promise<{ greenhouseId: string; deviceCount: number; devices: RealtimeDeviceState[] }> {
     return this.request(`/greenhouses/${greenhouseId}/telemetry/latest`);

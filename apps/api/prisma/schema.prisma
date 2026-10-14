@@ -41,6 +41,38 @@ enum UserRole {
   AI_AGENT
 }
 
+enum PlantCatalogStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum PlantVersionStatus {
+  DRAFT
+  PUBLISHED
+  RETIRED
+}
+
+enum PlantProfileStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum PlantProfileVersionStatus {
+  DRAFT
+  VALIDATED
+  RETIRED
+}
+
+enum ZonePlantAssignmentStatus {
+  ACTIVE
+  ENDED
+  CANCELLED
+}
+
+enum PlatformPermission {
+  PLANT_CATALOG_ADMIN
+}
+
 // ─── Authentication / User Models ────────────────────────────────────────────
 
 model User {
@@ -54,6 +86,17 @@ model User {
 
   memberships     OrganizationMembership[]
   refreshSessions RefreshSession[]
+  controlCommands ControlCommand[]
+  platformGrants PlatformAdminGrant[] @relation("PlatformGrantSubject")
+  grantsIssued PlatformAdminGrant[] @relation("PlatformGrantIssuer")
+  plantCatalogVersionsCreated PlantCatalogVersion[] @relation("CatalogVersionCreator")
+  plantCatalogVersionsPublished PlantCatalogVersion[] @relation("CatalogVersionPublisher")
+  plantProfilesCreated PlantProfile[] @relation("PlantProfileCreator")
+  plantProfileVersionsCreated PlantProfileVersion[] @relation("PlantProfileVersionCreator")
+  plantProfileVersionsValidated PlantProfileVersion[] @relation("PlantProfileVersionValidator")
+  plantAssignmentsCreated ZonePlantAssignment[] @relation("PlantAssignmentCreator")
+  zoneOverridesCreated ZoneParameterOverride[] @relation("ZoneOverrideCreator")
+  plantConfigAuditEvents PlantConfigAuditEvent[]
 
   @@map("users")
 }
@@ -104,6 +147,10 @@ model Organization {
 
   greenhouses Greenhouse[]
   memberships OrganizationMembership[]
+  plantProfiles PlantProfile[]
+  plantProfileVersions PlantProfileVersion[]
+  zonePlantAssignments ZonePlantAssignment[]
+  plantConfigAuditEvents PlantConfigAuditEvent[]
 
   @@map("organizations")
 }
@@ -124,8 +171,10 @@ model Greenhouse {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   zones        Zone[]
   devices      Device[]
+  plantAssignments ZonePlantAssignment[]
 
   @@unique([organizationId, code])
+  @@unique([id, organizationId])
   @@index([organizationId])
   @@map("greenhouses")
 }
@@ -145,8 +194,10 @@ model Zone {
   devices    Device[]
   sensors    Sensor[]
   actuators  Actuator[]
+  plantAssignments ZonePlantAssignment[]
 
   @@unique([greenhouseId, code])
+  @@unique([id, greenhouseId])
   @@index([greenhouseId])
   @@map("zones")
 }
@@ -217,6 +268,7 @@ model Actuator {
 
   device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
   zone   Zone?  @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  controlCommands ControlCommand[]
 
   @@unique([deviceId, code])
   @@index([deviceId])
@@ -286,18 +338,250 @@ model ControlCommand {
   id              String        @id @default(cuid())
   commandId       String        @unique
   deviceId        String
+  actuatorId      String?
+  userId          String?
   command         String
   target          String
   value           Json
   status          CommandStatus @default(PENDING)
+  result          Json?
+  error           String?
   createdAt       DateTime      @default(now())
   sentAt          DateTime?
   acknowledgedAt  DateTime?
   completedAt     DateTime?
 
   device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  actuator Actuator? @relation(fields: [actuatorId], references: [id], onDelete: SetNull)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([deviceId])
+  @@index([actuatorId])
+  @@index([userId])
   @@index([commandId])
   @@map("control_commands")
+}
+
+// Platform-wide catalog access is independent of tenant membership.
+model PlatformAdminGrant {
+  id             String             @id @default(cuid())
+  userId         String
+  permission     PlatformPermission
+  grantedByUserId String?
+  grantedAt      DateTime           @default(now())
+  revokedAt      DateTime?
+  user           User               @relation("PlatformGrantSubject", fields: [userId], references: [id], onDelete: Restrict)
+  grantedBy      User?              @relation("PlatformGrantIssuer", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([userId, permission])
+  @@map("platform_admin_grants")
+}
+
+model PlantCatalog {
+  id             String              @id @default(cuid())
+  code           String              @unique
+  scientificName String
+  commonName     String
+  cultivar       String?
+  status         PlantCatalogStatus  @default(ACTIVE)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  versions       PlantCatalogVersion[]
+  profiles       PlantProfile[]
+
+  @@map("plant_catalogs")
+}
+
+model PlantCatalogVersion {
+  id                   String             @id @default(cuid())
+  plantCatalogId       String
+  version              Int
+  status               PlantVersionStatus @default(DRAFT)
+  configSchemaVersion  String             @default("plant-config/v1")
+  profileDefaults      Json               @default("{}")
+  stageTemplates       Json               @default("[]")
+  edgeCompatibility    Json?
+  checksumAlgorithm    String             @default("SHA-256/JCS-RFC8785")
+  checksum             String?
+  createdByUserId      String
+  publishedByUserId    String?
+  createdAt            DateTime           @default(now())
+  publishedAt          DateTime?
+  plantCatalog         PlantCatalog       @relation(fields: [plantCatalogId], references: [id], onDelete: Restrict)
+  createdBy            User               @relation("CatalogVersionCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  publishedBy          User?              @relation("CatalogVersionPublisher", fields: [publishedByUserId], references: [id], onDelete: SetNull)
+  parameterDefinitions PlantParameterDefinition[]
+  profileVersions      PlantProfileVersion[]
+
+  @@unique([plantCatalogId, version])
+  @@unique([id, plantCatalogId])
+  @@index([status, publishedAt])
+  @@map("plant_catalog_versions")
+}
+
+model PlantParameterDefinition {
+  id                    String             @id @default(cuid())
+  plantCatalogVersionId String
+  parameterKey          String
+  label                 String
+  dataType              String
+  unit                  String?
+  metadataSchema        Json               @default("{}")
+  valueSchema           Json
+  createdAt             DateTime           @default(now())
+  plantCatalogVersion   PlantCatalogVersion @relation(fields: [plantCatalogVersionId], references: [id], onDelete: Restrict)
+
+  @@unique([plantCatalogVersionId, parameterKey])
+  @@index([plantCatalogVersionId])
+  @@map("plant_parameter_definitions")
+}
+
+model PlantProfile {
+  id             String            @id @default(cuid())
+  organizationId String
+  plantCatalogId String
+  code           String
+  name           String
+  status         PlantProfileStatus @default(ACTIVE)
+  createdByUserId String
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  plantCatalog   PlantCatalog      @relation(fields: [plantCatalogId], references: [id], onDelete: Restrict)
+  createdBy      User              @relation("PlantProfileCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  versions       PlantProfileVersion[]
+
+  @@unique([organizationId, code])
+  @@unique([id, organizationId, plantCatalogId])
+  @@map("plant_profiles")
+}
+
+model PlantProfileVersion {
+  id                       String                    @id @default(cuid())
+  plantProfileId           String
+  organizationId           String
+  plantCatalogId           String
+  version                  Int
+  sourceCatalogVersionId   String
+  adoptedFromVersionId     String?
+  status                   PlantProfileVersionStatus @default(DRAFT)
+  configSchemaVersion      String
+  profileConfig            Json                      @default("{}")
+  checksumAlgorithm        String                    @default("SHA-256/JCS-RFC8785")
+  checksum                 String?
+  createdByUserId          String
+  validatedByUserId        String?
+  createdAt                DateTime                  @default(now())
+  validatedAt              DateTime?
+  plantProfile             PlantProfile              @relation(fields: [plantProfileId, organizationId, plantCatalogId], references: [id, organizationId, plantCatalogId], onDelete: Restrict)
+  sourceCatalogVersion     PlantCatalogVersion       @relation(fields: [sourceCatalogVersionId, plantCatalogId], references: [id, plantCatalogId], onDelete: Restrict)
+  adoptedFrom              PlantProfileVersion?      @relation("ProfileVersionAdoption", fields: [adoptedFromVersionId, plantProfileId], references: [id, plantProfileId], onDelete: Restrict)
+  adoptedBy                PlantProfileVersion[]     @relation("ProfileVersionAdoption")
+  organization             Organization              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy                User                      @relation("PlantProfileVersionCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  validatedBy              User?                     @relation("PlantProfileVersionValidator", fields: [validatedByUserId], references: [id], onDelete: SetNull)
+  growthStages             GrowthStage[]
+  assignments              ZonePlantAssignment[]
+
+  @@unique([plantProfileId, version])
+  @@unique([id, organizationId])
+  @@unique([id, plantProfileId])
+  @@index([organizationId, status])
+  @@map("plant_profile_versions")
+}
+
+model GrowthStage {
+  id                   String             @id @default(cuid())
+  plantProfileVersionId String
+  code                 String
+  label                String
+  sequence             Int
+  minDurationDays      Int?
+  maxDurationDays      Int?
+  transitionCriteria   Json?
+  plantProfileVersion  PlantProfileVersion @relation(fields: [plantProfileVersionId], references: [id], onDelete: Restrict)
+  parameterConfig      StageParameterConfig?
+  assignments          ZonePlantAssignment[]
+
+  @@unique([plantProfileVersionId, code])
+  @@unique([plantProfileVersionId, sequence])
+  @@unique([id, plantProfileVersionId])
+  @@map("growth_stages")
+}
+
+model StageParameterConfig {
+  id                   String     @id @default(cuid())
+  growthStageId        String     @unique
+  config               Json       @default("{}")
+  configSchemaVersion  String
+  checksumAlgorithm   String     @default("SHA-256/JCS-RFC8785")
+  checksum             String?
+  growthStage          GrowthStage @relation(fields: [growthStageId], references: [id], onDelete: Restrict)
+
+  @@map("stage_parameter_configs")
+}
+
+model ZonePlantAssignment {
+  id                    String                   @id @default(cuid())
+  zoneId                String
+  greenhouseId          String
+  organizationId        String
+  plantProfileVersionId String
+  growthStageId         String
+  status                ZonePlantAssignmentStatus @default(ACTIVE)
+  activatedAt           DateTime                 @default(now())
+  endedAt               DateTime?
+  assignedByUserId      String
+  createdAt             DateTime                 @default(now())
+  zone                  Zone                     @relation(fields: [zoneId, greenhouseId], references: [id, greenhouseId], onDelete: Restrict)
+  greenhouse            Greenhouse               @relation(fields: [greenhouseId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  organization          Organization             @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  plantProfileVersion   PlantProfileVersion      @relation(fields: [plantProfileVersionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  growthStage           GrowthStage              @relation(fields: [growthStageId, plantProfileVersionId], references: [id, plantProfileVersionId], onDelete: Restrict)
+  assignedBy            User                     @relation("PlantAssignmentCreator", fields: [assignedByUserId], references: [id], onDelete: Restrict)
+  overrides             ZoneParameterOverride[]
+
+  @@index([organizationId, zoneId, status])
+  @@index([plantProfileVersionId])
+  @@map("zone_plant_assignments")
+}
+
+model ZoneParameterOverride {
+  id                  String                 @id @default(cuid())
+  assignmentId        String
+  revision            Int
+  overrideConfig      Json                   @default("{}")
+  configSchemaVersion String
+  checksumAlgorithm  String                 @default("SHA-256/JCS-RFC8785")
+  checksum            String?
+  createdByUserId     String
+  createdAt           DateTime               @default(now())
+  supersededAt        DateTime?
+  assignment          ZonePlantAssignment    @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  createdBy           User                   @relation("ZoneOverrideCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([assignmentId, revision])
+  @@index([assignmentId, supersededAt])
+  @@map("zone_parameter_overrides")
+}
+
+model PlantConfigAuditEvent {
+  id             String   @id @default(cuid())
+  organizationId String?
+  actorUserId    String?
+  action         String
+  entityType     String
+  entityId       String
+  fromChecksum   String?
+  toChecksum     String?
+  details        Json?
+  requestId      String?
+  createdAt      DateTime @default(now())
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  actor          User? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([entityType, entityId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@map("plant_config_audit_events")
 }

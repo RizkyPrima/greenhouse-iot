@@ -11,6 +11,7 @@ import {
   History,
   Settings,
   Leaf,
+  X,
 } from 'lucide-react';
 
 const navigationItems = [
@@ -22,11 +23,13 @@ const navigationItems = [
   { name: 'Settings & Access', href: '/settings', icon: Settings },
 ];
 
-export function Sidebar() {
+export function Sidebar({ isOpen = false, onClose = () => {} }: { isOpen?: boolean; onClose?: () => void }) {
   const pathname = usePathname();
 
   return (
-    <aside className="w-64 flex-shrink-0 border-r border-slate-800/80 bg-slate-950 flex flex-col h-screen sticky top-0 z-30">
+    <>
+      {isOpen && <button type="button" aria-label="Tutup menu" onClick={onClose} className="fixed inset-0 z-30 bg-slate-950/70 backdrop-blur-sm md:hidden" />}
+      <aside className={`fixed inset-y-0 left-0 z-40 flex h-screen w-72 flex-shrink-0 flex-col border-r border-slate-800/80 bg-slate-950 transition-transform duration-200 md:sticky md:top-0 md:z-30 md:w-64 md:translate-x-0 ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
       {/* Brand Logo Header */}
       <div className="h-16 flex items-center px-6 border-b border-slate-800/80 gap-3">
         <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-950/50">
@@ -40,6 +43,9 @@ export function Sidebar() {
             Phase 7 System
           </span>
         </div>
+        <button type="button" aria-label="Tutup menu" onClick={onClose} className="ml-auto rounded-lg p-2 text-slate-400 hover:bg-slate-900 md:hidden">
+          <X className="h-5 w-5" />
+        </button>
       </div>
 
       {/* Navigation Links */}
@@ -55,6 +61,7 @@ export function Sidebar() {
             <Link
               key={item.name}
               href={item.href}
+              onClick={onClose}
               className={`flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-medium transition-all group ${
                 isActive
                   ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold shadow-sm'
@@ -80,15 +87,16 @@ export function Sidebar() {
       </div>
 
       {/* Bottom Info Banner */}
-      <div className="p-4 border-t border-slate-800/80 bg-slate-950/60 text-[11px] text-slate-400">
+      <div className="py-3 px-4 pl-12 border-t border-slate-800/80 bg-slate-950/60 text-[11px] text-slate-400">
         <div className="flex items-center justify-between font-mono">
           <span>Engine Status</span>
           <span className="text-emerald-400">NORMAL</span>
         </div>
-        <div className="text-[10px] text-slate-400 mt-1 font-mono">
+        <div className="text-[10px] text-slate-400 mt-0.5 font-mono">
           EMQX · NestJS · Redis · PG
         </div>
       </div>
     </aside>
+    </>
   );
 }

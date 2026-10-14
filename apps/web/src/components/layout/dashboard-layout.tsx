@@ -1,12 +1,13 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Sidebar } from './sidebar';
 import { Header } from './header';
 import { useAuth } from '@/context/auth-context';
 
 export function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { isLoading, isAuthenticated } = useAuth();
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -23,10 +24,10 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex">
-      <Sidebar />
+      <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
       <div className="flex-1 flex flex-col min-w-0">
-        <Header />
-        <main className="flex-1 p-6 md:p-8 overflow-y-auto">
+        <Header onMenuClick={() => setIsSidebarOpen((open) => !open)} />
+        <main className="flex-1 min-w-0 p-4 sm:p-6 md:p-8 overflow-y-auto">
           {children}
         </main>
       </div>

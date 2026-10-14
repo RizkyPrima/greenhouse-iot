@@ -9,9 +9,13 @@ import { GreenhouseStatusBadge, DeviceStatusBadge } from '@/components/common/st
 import { SkeletonTable, EmptyState } from '@/components/common/empty-state';
 import { Greenhouse, Zone, Device } from '@/types';
 import { Warehouse, Layers, Cpu, X } from 'lucide-react';
+import { useSocket } from '@/context/socket-context';
+import { useStatusClock } from '@/hooks/use-status-clock';
 
 export default function GreenhousesPage() {
   const { currentOrg } = useAuth();
+  const { deviceStates } = useSocket();
+  const now = useStatusClock();
   const [selectedGreenhouse, setSelectedGreenhouse] = useState<Greenhouse | null>(null);
 
   // Fetch greenhouses
@@ -224,7 +228,11 @@ export default function GreenhousesPage() {
                           <span className="font-semibold text-slate-200">{d.name}</span>
                           <span className="font-mono text-slate-400 ml-2">({d.deviceId})</span>
                         </div>
-                        <DeviceStatusBadge status={d.status} lastSeenAt={d.lastSeenAt} />
+                        <DeviceStatusBadge
+                          status={deviceStates[d.deviceId]?.status ?? d.status}
+                          lastSeenAt={deviceStates[d.deviceId]?.lastSeenAt ?? d.lastSeenAt}
+                          now={now}
+                        />
                       </div>
                     ))}
                   </div>

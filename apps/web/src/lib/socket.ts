@@ -7,6 +7,7 @@ class RealtimeSocketManager {
   private socket: Socket | null = null;
   private statusListeners: Set<(status: ConnectionStatus) => void> = new Set();
   private status: ConnectionStatus = 'DISCONNECTED';
+  private currentToken: string | null = null;
 
   getStatus(): ConnectionStatus {
     return this.status;
@@ -27,12 +28,22 @@ class RealtimeSocketManager {
     };
   }
 
-  connect(): Socket {
+  connect(explicitToken?: string | null): Socket {
+    const token =
+      explicitToken !== undefined
+        ? explicitToken
+        : typeof window !== 'undefined'
+        ? localStorage.getItem('greenhouse_access_token') || localStorage.getItem('access_token')
+        : null;
+
+    this.currentToken = token;
+
     if (this.socket && this.socket.connected) {
       return this.socket;
     }
 
     if (this.socket) {
+      this.socket.auth = { token };
       this.socket.connect();
       return this.socket;
     }
@@ -41,6 +52,14 @@ class RealtimeSocketManager {
 
     this.socket = io(`${WS_BASE_URL}/realtime`, {
       transports: ['websocket', 'polling'],
+      auth: (cb: (data: Record<string, unknown>) => void) => {
+        const activeToken =
+          this.currentToken ||
+          (typeof window !== 'undefined'
+            ? localStorage.getItem('greenhouse_access_token') || localStorage.getItem('access_token')
+            : null);
+        cb({ token: activeToken });
+      },
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
@@ -71,6 +90,18 @@ class RealtimeSocketManager {
     return this.socket;
   }
 
+  updateAuthToken(token: string | null) {
+    this.currentToken = token;
+    if (this.socket) {
+      this.socket.auth = { token };
+      if (!this.socket.connected && token) {
+        this.socket.connect();
+      }
+    } else if (token) {
+      this.connect(token);
+    }
+  }
+
   disconnect() {
     if (this.socket) {
       this.socket.disconnect();
@@ -83,7 +114,9 @@ class RealtimeSocketManager {
   }
 
   subscribeGreenhouse(greenhouseId: string) {
-    if (!this.socket) this.connect();
+    if (!this.socket || !this.socket.connected) {
+      this.connect();
+    }
     this.socket?.emit('subscribe:greenhouse', { greenhouseId });
   }
 
@@ -92,7 +125,9 @@ class RealtimeSocketManager {
   }
 
   subscribeDevice(deviceMqttId: string) {
-    if (!this.socket) this.connect();
+    if (!this.socket || !this.socket.connected) {
+      this.connect();
+    }
     this.socket?.emit('subscribe:device', { deviceMqttId });
   }
 }

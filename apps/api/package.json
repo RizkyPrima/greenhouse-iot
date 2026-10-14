@@ -20,7 +20,8 @@
     "test:cov": "vitest run --coverage",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
-    "db:seed": "npx dotenv -e .env -- npx tsx prisma/seed.ts"
+    "db:seed": "npx tsx --env-file=.env prisma/seed.ts",
+    "simulate:telemetry": "npx tsx --env-file=.env scripts/simulate-telemetry.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",
@@ -33,6 +34,7 @@
     "@nestjs/terminus": "^12.1.0",
     "@nestjs/websockets": "^12.1.2",
     "@prisma/client": "^6.19.3",
+    "ajv": "^8.20.0",
     "argon2": "^0.45.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",

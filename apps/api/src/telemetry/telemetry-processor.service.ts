@@ -7,17 +7,20 @@ import { TelemetryPersistenceService } from './telemetry-persistence.service.js'
 
 import { TelemetryGateway } from './telemetry.gateway.js';
 import { Optional } from '@nestjs/common';
+import { ControlCommandsService } from '../actuators/control-commands.service.js';
 
 @Injectable()
 export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TelemetryProcessorService.name);
   private unsubscribeHandler: (() => void) | null = null;
+  private commandTimeoutTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly mqtt: MqttService,
     private readonly realtime: TelemetryRealtimeService,
     private readonly persistence: TelemetryPersistenceService,
     @Optional() private readonly gateway?: TelemetryGateway,
+    @Optional() private readonly commands?: ControlCommandsService,
   ) {}
 
   onModuleInit(): void {
@@ -25,9 +28,18 @@ export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy 
       (msg: MqttMessage) => void this.handleMessage(msg),
     );
     this.logger.log('[TELEMETRY_PROCESSOR] MQTT message handler registered');
+    this.commandTimeoutTimer = setInterval(() => {
+      void this.commands?.expireSentCommands().then((updates) => {
+        updates.forEach((update) => this.gateway?.broadcastCommandUpdate(update));
+      }).catch((error: unknown) => {
+        this.logger.error(`[COMMAND_TIMEOUT_ERROR] ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }, 1000);
+    this.commandTimeoutTimer.unref?.();
   }
 
   onModuleDestroy(): void {
+    if (this.commandTimeoutTimer) clearInterval(this.commandTimeoutTimer);
     if (this.unsubscribeHandler) {
       this.unsubscribeHandler();
       this.logger.log('[TELEMETRY_PROCESSOR] MQTT message handler unregistered');
@@ -53,6 +65,11 @@ export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy 
       case 'alarm':
         this.logger.warn(`[TELEMETRY_ALARM] greenhouse=${greenhouseId} device=${deviceMqttId}`);
         break;
+      case 'response': {
+        const update = await this.commands?.handleResponse(deviceMqttId, payload);
+        if (update) this.gateway?.broadcastCommandUpdate(update);
+        break;
+      }
       default:
         break;
     }

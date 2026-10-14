@@ -123,6 +123,7 @@ export class TelemetryRealtimeService {
           state.status = 'offline';
         }
       }
+
       return state;
     } catch {
       return null;

@@ -88,3 +88,37 @@ describe('PlantsService platform catalog reads', () => {
     });
   });
 });
+
+describe('PlantsService zone assignment reads', () => {
+  const actor = { id: 'member-a' } as AuthenticatedUser;
+
+  it('scopes assignment history to the selected zone and its owning organization', async () => {
+    const findMany = vi.fn().mockResolvedValue([{ id: 'assignment-a', status: 'ACTIVE', overrides: [] }]);
+    const service = new PlantsService(
+      { zonePlantAssignment: { findMany } } as never,
+      {
+        zoneOrganizationId: vi.fn().mockResolvedValue('org-a'),
+        getMembership: vi.fn().mockResolvedValue({ role: UserRole.VIEWER }),
+        organizationExists: vi.fn().mockResolvedValue(true),
+      } as never,
+    );
+
+    await expect(service.listZoneAssignments('zone-a', actor)).resolves.toMatchObject([{ id: 'assignment-a' }]);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { zoneId: 'zone-a', organizationId: 'org-a' } }));
+  });
+
+  it('does not query assignment history when the user is not a member of the zone organization', async () => {
+    const findMany = vi.fn();
+    const service = new PlantsService(
+      { zonePlantAssignment: { findMany } } as never,
+      {
+        zoneOrganizationId: vi.fn().mockResolvedValue('org-b'),
+        getMembership: vi.fn().mockRejectedValue(new ForbiddenException()),
+        organizationExists: vi.fn(),
+      } as never,
+    );
+
+    await expect(service.listZoneAssignments('zone-b', actor)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(findMany).not.toHaveBeenCalled();
+  });
+});

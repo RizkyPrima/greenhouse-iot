@@ -470,6 +470,33 @@ export class PlantsService {
     });
   }
 
+  async listZoneAssignments(zoneId: string, actor: AuthenticatedUser) {
+    const organizationId = await this.authorization.zoneOrganizationId(zoneId);
+    await this.requireOrganization(actor.id, organizationId, false);
+    return this.prisma.zonePlantAssignment.findMany({
+      where: { zoneId, organizationId },
+      orderBy: [{ activatedAt: 'desc' }, { createdAt: 'desc' }],
+      include: {
+        plantProfileVersion: {
+          include: {
+            plantProfile: { select: { id: true, code: true, name: true, status: true } },
+            sourceCatalogVersion: {
+              select: {
+                id: true,
+                version: true,
+                status: true,
+                configSchemaVersion: true,
+                parameterDefinitions: true,
+              },
+            },
+          },
+        },
+        growthStage: { include: { parameterConfig: true } },
+        overrides: { orderBy: { revision: 'desc' } },
+      },
+    });
+  }
+
   async createProfile(organizationId: string, dto: CreatePlantProfileDto, actor: AuthenticatedUser) {
     await this.requireOrganization(actor.id, organizationId, true);
     const source = await this.getPublishedCatalogVersion(dto.catalogVersionId);

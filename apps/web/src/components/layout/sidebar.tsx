@@ -11,6 +11,8 @@ import {
   History,
   Settings,
   Leaf,
+  Sprout,
+  Layers,
   X,
 } from 'lucide-react';
 
@@ -21,6 +23,8 @@ const navigationItems = [
   { name: 'Realtime Feed', href: '/realtime', icon: Activity, badge: 'LIVE' },
   { name: 'Historical Data', href: '/history', icon: History },
   { name: 'Plant Catalog', href: '/plant-catalog', icon: Leaf },
+  { name: 'Plant Profiles', href: '/plant-profiles', icon: Sprout },
+  { name: 'Zone Plant Setup', href: '/plant-assignments', icon: Layers },
   { name: 'Settings & Access', href: '/settings', icon: Settings },
 ];
 

@@ -159,6 +159,11 @@ export class PlantsController {
     return this.plants.listAudit(organizationId, user);
   }
 
+  @Get('zones/:zoneId/plant-assignments')
+  listZoneAssignments(@Param('zoneId') zoneId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.listZoneAssignments(zoneId, user);
+  }
+
   @Post('zones/:zoneId/plant-assignments')
   activateZone(@Param('zoneId') zoneId: string, @Body() dto: ActivatePlantProfileDto, @CurrentUser() user: AuthenticatedUser) {
     return this.plants.activateZone(zoneId, dto, user);

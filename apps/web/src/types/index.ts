@@ -324,7 +324,7 @@ export interface GrowthStage {
   minDurationDays: number | null;
   maxDurationDays: number | null;
   transitionCriteria: PlantJsonObject | null;
-  parameterConfig?: PlantStageParameterConfig[];
+  parameterConfig?: PlantStageParameterConfig | null;
 }
 
 export interface PlantProfileVersion {
@@ -400,6 +400,15 @@ export interface ZonePlantAssignment {
   endedAt: string | null;
   assignedByUserId: string;
   createdAt: string;
+}
+
+export interface ZonePlantAssignmentDetails extends ZonePlantAssignment {
+  plantProfileVersion: PlantProfileVersion & {
+    plantProfile: Pick<PlantProfile, 'id' | 'code' | 'name' | 'status'>;
+    sourceCatalogVersion: Pick<PlantCatalogVersion, 'id' | 'version' | 'status' | 'configSchemaVersion' | 'parameterDefinitions'>;
+  };
+  growthStage: GrowthStage;
+  overrides: ZoneParameterOverride[];
 }
 
 export interface ZoneParameterOverride {

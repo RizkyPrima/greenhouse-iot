@@ -71,6 +71,34 @@ enum ZonePlantAssignmentStatus {
 
 enum PlatformPermission {
   PLANT_CATALOG_ADMIN
+  RESEARCH_SOURCE_ADMIN
+  RESEARCH_SOURCE_GRANT_ADMIN
+}
+
+enum ResearchJobType {
+  MANUAL_REGISTRATION
+  METADATA_SEARCH
+}
+
+enum ResearchJobStatus {
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+}
+
+enum ResearchAccessStatus {
+  UNKNOWN
+  OPEN
+  RESTRICTED
+  CLOSED
+}
+
+enum ResearchLicenseStatus {
+  UNKNOWN
+  OPEN_LICENSE
+  RESTRICTED_LICENSE
+  ALL_RIGHTS_RESERVED
 }
 
 // ─── Authentication / User Models ────────────────────────────────────────────
@@ -97,6 +125,8 @@ model User {
   plantAssignmentsCreated ZonePlantAssignment[] @relation("PlantAssignmentCreator")
   zoneOverridesCreated ZoneParameterOverride[] @relation("ZoneOverrideCreator")
   plantConfigAuditEvents PlantConfigAuditEvent[]
+  researchJobs ResearchJob[]
+  researchSources ResearchSource[]
 
   @@map("users")
 }
@@ -584,4 +614,74 @@ model PlantConfigAuditEvent {
   @@index([entityType, entityId, createdAt])
   @@index([actorUserId, createdAt])
   @@map("plant_config_audit_events")
+}
+
+// Global evidence registry. It stores publication metadata and provenance only;
+// source documents/full text are deliberately not ingested in this phase.
+// Case-insensitive DOI/provider-id unique expression indexes are SQL-only because Prisma
+// cannot represent LOWER() indexes; see the Phase 10.4.2 migration.
+model ResearchSource {
+  id                    String                @id @default(cuid())
+  doiNormalized         String?
+  alternateIdentifierType String?
+  alternateIdentifier   String?
+  crossrefId            String?
+  openAlexId            String?
+  title                 String
+  authors               Json                  @default("[]")
+  publicationYear       Int?
+  journal               String?
+  publisher             String?
+  abstract              String?
+  abstractLicenseStatus ResearchLicenseStatus @default(UNKNOWN)
+  sourceUrl             String?
+  metadataProvider      String?
+  providerMetadata      Json                  @default("{}")
+  metadataFetchedAt     DateTime?
+  accessStatus          ResearchAccessStatus  @default(UNKNOWN)
+  licenseStatus         ResearchLicenseStatus @default(UNKNOWN)
+  licenseUrl            String?
+  createdByUserId       String
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  createdBy             User                  @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+  jobResults            ResearchJobSource[]
+
+  @@index([publicationYear])
+  @@unique([alternateIdentifierType, alternateIdentifier])
+  @@index([metadataProvider, metadataFetchedAt])
+  @@map("research_sources")
+}
+
+model ResearchJob {
+  id             String           @id @default(cuid())
+  type           ResearchJobType
+  provider       String?
+  query          String?
+  status         ResearchJobStatus
+  resultCount    Int              @default(0)
+  summary        Json             @default("{}")
+  safeErrorCode  String?
+  actorUserId    String
+  startedAt      DateTime         @default(now())
+  finishedAt     DateTime?
+  actor          User             @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+  results        ResearchJobSource[]
+
+  @@index([actorUserId, startedAt])
+  @@index([type, status, startedAt])
+  @@map("research_jobs")
+}
+
+model ResearchJobSource {
+  jobId         String
+  sourceId      String
+  provider      String
+  retrievedAt   DateTime      @default(now())
+  job           ResearchJob   @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  source        ResearchSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+
+  @@id([jobId, sourceId, provider])
+  @@index([sourceId, retrievedAt])
+  @@map("research_job_sources")
 }

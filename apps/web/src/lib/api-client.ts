@@ -2,7 +2,7 @@ import {
   User, Organization, OrganizationMember, UserMembership, Greenhouse, Zone, Device, Sensor, Actuator,
   RealtimeDeviceState, TelemetryRecord, PlantCatalog, PlantCatalogVersion, PlantProfile, PlantProfileVersion,
   GrowthStage, PlantParameterDefinition, PlatformAdminGrant, PlantConfigAuditEvent, ZonePlantAssignment,
-  ZoneParameterOverride, EffectiveZonePlantConfig, CreatePlantCatalogDto, CreatePlantCatalogVersionDto,
+  ZoneParameterOverride, ZonePlantAssignmentDetails, EffectiveZonePlantConfig, CreatePlantCatalogDto, CreatePlantCatalogVersionDto,
   UpdatePlantCatalogVersionDto, CreatePlantParameterDefinitionDto, UpdatePlantParameterDefinitionDto,
   CreatePlantProfileDto, UpdatePlantProfileDraftDto, CreateGrowthStageDto, UpdateGrowthStageDto,
   AdoptPlantCatalogVersionDto, ActivatePlantProfileDto, CreateZoneOverrideDto, CreatePlatformGrantDto,
@@ -417,6 +417,10 @@ class ApiClient {
 
   async activatePlantProfileInZone(zoneId: string, payload: ActivatePlantProfileDto): Promise<ZonePlantAssignment> {
     return this.request(`/zones/${encodeURIComponent(zoneId)}/plant-assignments`, { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  async getZonePlantAssignments(zoneId: string): Promise<ZonePlantAssignmentDetails[]> {
+    return this.request(`/zones/${encodeURIComponent(zoneId)}/plant-assignments`);
   }
 
   async createZoneParameterOverride(assignmentId: string, payload: CreateZoneOverrideDto): Promise<ZoneParameterOverride> {

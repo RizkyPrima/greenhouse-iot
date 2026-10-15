@@ -22,6 +22,7 @@ import { ActuatorsModule } from './actuators/actuators.module.js';
 import { TelemetryModule } from './telemetry/telemetry.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { PlantsModule } from './plants/plants.module.js';
+import { ResearchModule } from './research/research.module.js';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { PlantsModule } from './plants/plants.module.js';
     TelemetryModule,
     AuthModule,
     PlantsModule,
+    ResearchModule,
   ],
 })
 export class AppModule implements NestModule {

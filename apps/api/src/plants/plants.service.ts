@@ -60,59 +60,38 @@ export class PlantsService {
     private readonly authorization: AuthorizationService,
   ) {}
 
-  listCatalog() {
+  async listCatalogForOrganization(organizationId: string, actor: AuthenticatedUser) {
+    const membership = await this.requireOrganization(actor.id, organizationId, false);
+    const canManage = membership.role === UserRole.OWNER || membership.role === UserRole.ADMIN;
     return this.prisma.plantCatalog.findMany({
-      where: { status: 'ACTIVE', versions: { some: { status: PlantVersionStatus.PUBLISHED } } },
+      where: { organizationId, ...(canManage ? {} : { status: 'ACTIVE', versions: { some: { status: PlantVersionStatus.PUBLISHED } } }) },
       include: {
         versions: {
-          where: { status: PlantVersionStatus.PUBLISHED },
-          orderBy: { version: 'desc' },
-          include: { parameterDefinitions: true },
+          ...(canManage ? {} : { where: { status: PlantVersionStatus.PUBLISHED } }),
+          orderBy: { version: 'desc' }, include: { parameterDefinitions: true },
         },
       },
       orderBy: { commonName: 'asc' },
     });
   }
 
-  listCatalogForAdmin() {
-    return this.prisma.plantCatalog.findMany({
-      include: {
-        versions: {
-          orderBy: { version: 'desc' },
-          include: { parameterDefinitions: true },
-        },
-      },
-      orderBy: { commonName: 'asc' },
-    });
-  }
-
-  async getCatalogForAdmin(catalogId: string) {
-    const catalog = await this.prisma.plantCatalog.findUnique({
-      where: { id: catalogId },
-      include: {
-        versions: {
-          orderBy: { version: 'desc' },
-          include: { parameterDefinitions: true },
-        },
-      },
-    });
-    if (!catalog) throw new NotFoundException('Plant catalog not found');
-    return catalog;
-  }
-
-  async getCatalog(catalogId: string) {
+  async getCatalogForOrganization(organizationId: string, catalogId: string, actor: AuthenticatedUser) {
+    const membership = await this.requireOrganization(actor.id, organizationId, false);
+    const canManage = membership.role === UserRole.OWNER || membership.role === UserRole.ADMIN;
     const catalog = await this.prisma.plantCatalog.findFirst({
-      where: { id: catalogId, status: 'ACTIVE', versions: { some: { status: PlantVersionStatus.PUBLISHED } } },
-      include: { versions: { where: { status: PlantVersionStatus.PUBLISHED }, orderBy: { version: 'desc' }, include: { parameterDefinitions: true } } },
+      where: { id: catalogId, organizationId, ...(canManage ? {} : { status: 'ACTIVE', versions: { some: { status: PlantVersionStatus.PUBLISHED } } }) },
+      include: { versions: { ...(canManage ? {} : { where: { status: PlantVersionStatus.PUBLISHED } }), orderBy: { version: 'desc' }, include: { parameterDefinitions: true } } },
     });
     if (!catalog) throw new NotFoundException('Plant catalog not found');
     return catalog;
   }
 
-  async createCatalog(dto: CreatePlantCatalogDto, actor: AuthenticatedUser) {
+  async createCatalog(organizationId: string, dto: CreatePlantCatalogDto, actor: AuthenticatedUser) {
+    await this.requireOrganization(actor.id, organizationId, true);
     return this.prisma.$transaction(async (tx) => {
       const catalog = await tx.plantCatalog.create({
         data: {
+          organizationId,
           code: dto.code.trim().toLowerCase(),
           scientificName: dto.scientificName.trim(),
           commonName: dto.commonName.trim(),
@@ -120,14 +99,15 @@ export class PlantsService {
         },
       });
       await tx.plantConfigAuditEvent.create({
-        data: { actorUserId: actor.id, action: 'CATALOG_CREATED', entityType: 'PlantCatalog', entityId: catalog.id },
+        data: { actorUserId: actor.id, organizationId, action: 'CATALOG_CREATED', entityType: 'PlantCatalog', entityId: catalog.id },
       });
       return catalog;
     });
   }
 
-  async createCatalogVersion(catalogId: string, dto: CreateCatalogVersionDto, actor: AuthenticatedUser) {
-    const catalog = await this.prisma.plantCatalog.findUnique({ where: { id: catalogId } });
+  async createCatalogVersion(organizationId: string, catalogId: string, dto: CreateCatalogVersionDto, actor: AuthenticatedUser) {
+    await this.requireOrganization(actor.id, organizationId, true);
+    const catalog = await this.prisma.plantCatalog.findFirst({ where: { id: catalogId, organizationId } });
     if (!catalog) throw new NotFoundException('Plant catalog not found');
     const previous = await this.prisma.plantCatalogVersion.aggregate({
       where: { plantCatalogId: catalogId },
@@ -146,13 +126,14 @@ export class PlantsService {
         },
       });
       await tx.plantConfigAuditEvent.create({
-        data: { actorUserId: actor.id, action: 'CATALOG_VERSION_DRAFTED', entityType: 'PlantCatalogVersion', entityId: version.id },
+        data: { actorUserId: actor.id, organizationId, action: 'CATALOG_VERSION_DRAFTED', entityType: 'PlantCatalogVersion', entityId: version.id },
       });
       return version;
     });
   }
 
-  async updateCatalogVersion(versionId: string, dto: UpdateCatalogVersionDto, actor: AuthenticatedUser) {
+  async updateCatalogVersion(organizationId: string, versionId: string, dto: UpdateCatalogVersionDto, actor: AuthenticatedUser) {
+    await this.assertCatalogVersionOrganization(organizationId, actor, versionId, true);
     const version = await this.prisma.plantCatalogVersion.findUnique({ where: { id: versionId } });
     if (!version) throw new NotFoundException('Plant catalog version not found');
     if (version.status !== PlantVersionStatus.DRAFT) throw new ConflictException('Published catalog versions are immutable');
@@ -165,13 +146,14 @@ export class PlantsService {
           ...(dto.edgeCompatibility !== undefined ? { edgeCompatibility: dto.edgeCompatibility as Prisma.InputJsonValue } : {}),
         },
       });
-      await tx.plantConfigAuditEvent.create({ data: { actorUserId: actor.id, action: 'CATALOG_VERSION_EDITED', entityType: 'PlantCatalogVersion', entityId: versionId } });
+      await tx.plantConfigAuditEvent.create({ data: { actorUserId: actor.id, organizationId, action: 'CATALOG_VERSION_EDITED', entityType: 'PlantCatalogVersion', entityId: versionId } });
       return result;
     });
     return updated;
   }
 
-  async createParameterDefinition(versionId: string, dto: CreateParameterDefinitionDto, actor: AuthenticatedUser) {
+  async createParameterDefinition(organizationId: string, versionId: string, dto: CreateParameterDefinitionDto, actor: AuthenticatedUser) {
+    await this.assertCatalogVersionOrganization(organizationId, actor, versionId, true);
     const version = await this.prisma.plantCatalogVersion.findUnique({ where: { id: versionId } });
     if (!version) throw new NotFoundException('Plant catalog version not found');
     if (version.status !== PlantVersionStatus.DRAFT) throw new ConflictException('Published catalog versions are immutable');
@@ -191,13 +173,14 @@ export class PlantsService {
         },
       });
       await tx.plantConfigAuditEvent.create({
-        data: { actorUserId: actor.id, action: 'PARAMETER_DEFINED', entityType: 'PlantParameterDefinition', entityId: definition.id },
+        data: { actorUserId: actor.id, organizationId, action: 'PARAMETER_DEFINED', entityType: 'PlantParameterDefinition', entityId: definition.id },
       });
       return definition;
     });
   }
 
-  async updateParameterDefinition(versionId: string, parameterId: string, dto: UpdateParameterDefinitionDto, actor: AuthenticatedUser) {
+  async updateParameterDefinition(organizationId: string, versionId: string, parameterId: string, dto: UpdateParameterDefinitionDto, actor: AuthenticatedUser) {
+    await this.assertCatalogVersionOrganization(organizationId, actor, versionId, true);
     return this.prisma.$transaction(async (tx) => {
       const definition = await tx.plantParameterDefinition.findFirst({
         where: { id: parameterId, plantCatalogVersionId: versionId },
@@ -225,13 +208,14 @@ export class PlantsService {
 
       const updated = await tx.plantParameterDefinition.update({ where: { id: parameterId }, data: normalized });
       await tx.plantConfigAuditEvent.create({
-        data: { actorUserId: actor.id, action: 'PARAMETER_DEFINITION_EDITED', entityType: 'PlantParameterDefinition', entityId: parameterId },
+        data: { actorUserId: actor.id, organizationId, action: 'PARAMETER_DEFINITION_EDITED', entityType: 'PlantParameterDefinition', entityId: parameterId },
       });
       return updated;
     });
   }
 
-  async deleteParameterDefinition(versionId: string, parameterId: string, actor: AuthenticatedUser) {
+  async deleteParameterDefinition(organizationId: string, versionId: string, parameterId: string, actor: AuthenticatedUser) {
+    await this.assertCatalogVersionOrganization(organizationId, actor, versionId, true);
     return this.prisma.$transaction(async (tx) => {
       const definition = await tx.plantParameterDefinition.findFirst({
         where: { id: parameterId, plantCatalogVersionId: versionId },
@@ -250,13 +234,14 @@ export class PlantsService {
       this.validateCatalogDraftConfiguration(version, remaining);
       await tx.plantParameterDefinition.delete({ where: { id: parameterId } });
       await tx.plantConfigAuditEvent.create({
-        data: { actorUserId: actor.id, action: 'PARAMETER_DEFINITION_DELETED', entityType: 'PlantParameterDefinition', entityId: parameterId },
+        data: { actorUserId: actor.id, organizationId, action: 'PARAMETER_DEFINITION_DELETED', entityType: 'PlantParameterDefinition', entityId: parameterId },
       });
       return { id: parameterId, deleted: true };
     });
   }
 
-  async publishCatalogVersion(versionId: string, actor: AuthenticatedUser) {
+  async publishCatalogVersion(organizationId: string, versionId: string, actor: AuthenticatedUser) {
+    await this.assertCatalogVersionOrganization(organizationId, actor, versionId, true);
     const version = await this.prisma.plantCatalogVersion.findUnique({
       where: { id: versionId },
       include: { parameterDefinitions: true },
@@ -299,7 +284,7 @@ export class PlantsService {
         data: { status: PlantVersionStatus.PUBLISHED, checksum, publishedByUserId: actor.id, publishedAt: now },
       });
       await tx.plantConfigAuditEvent.create({
-        data: { actorUserId: actor.id, action: 'CATALOG_VERSION_PUBLISHED', entityType: 'PlantCatalogVersion', entityId: versionId, toChecksum: checksum },
+        data: { actorUserId: actor.id, organizationId, action: 'CATALOG_VERSION_PUBLISHED', entityType: 'PlantCatalogVersion', entityId: versionId, toChecksum: checksum },
       });
       return result;
     });
@@ -499,7 +484,7 @@ export class PlantsService {
 
   async createProfile(organizationId: string, dto: CreatePlantProfileDto, actor: AuthenticatedUser) {
     await this.requireOrganization(actor.id, organizationId, true);
-    const source = await this.getPublishedCatalogVersion(dto.catalogVersionId);
+    const source = await this.getPublishedCatalogVersion(dto.catalogVersionId, organizationId);
     const profileConfig = mergePlantConfig(source.profileDefaults as Record<string, unknown>, dto.profileConfig ?? {});
     const profileId = await this.prisma.$transaction(async (tx) => {
       const profile = await tx.plantProfile.create({
@@ -549,7 +534,7 @@ export class PlantsService {
     if (prior.status !== PlantProfileVersionStatus.VALIDATED) {
       throw new ConflictException('Only a validated profile version can be used as an adoption base');
     }
-    const source = await this.getPublishedCatalogVersion(dto.catalogVersionId);
+    const source = await this.getPublishedCatalogVersion(dto.catalogVersionId, organizationId);
     if (source.plantCatalogId !== profile.plantCatalogId) throw new ConflictException('Catalog source cannot change for an existing profile');
     const latest = await this.prisma.plantProfileVersion.aggregate({ where: { plantProfileId: profileId }, _max: { version: true } });
     return this.prisma.$transaction(async (tx) => {
@@ -791,12 +776,20 @@ export class PlantsService {
     };
   }
 
-  private async getPublishedCatalogVersion(id: string) {
+  private async getPublishedCatalogVersion(id: string, organizationId: string) {
     const version = await this.prisma.plantCatalogVersion.findUnique({
       where: { id }, include: { parameterDefinitions: true },
     });
     if (!version || version.status !== PlantVersionStatus.PUBLISHED) throw new NotFoundException('Published plant catalog version not found');
+    const catalog = await this.prisma.plantCatalog.findFirst({ where: { id: version.plantCatalogId, organizationId }, select: { id: true } });
+    if (!catalog) throw new NotFoundException('Published plant catalog version not found');
     return version;
+  }
+
+  private async assertCatalogVersionOrganization(organizationId: string, actor: AuthenticatedUser, versionId: string, manage: boolean) {
+    await this.requireOrganization(actor.id, organizationId, manage);
+    const version = await this.prisma.plantCatalogVersion.findFirst({ where: { id: versionId, plantCatalog: { organizationId } }, select: { id: true } });
+    if (!version) throw new NotFoundException('Plant catalog version not found');
   }
 
   private async requireOrganization(userId: string, organizationId: string, manage: boolean) {

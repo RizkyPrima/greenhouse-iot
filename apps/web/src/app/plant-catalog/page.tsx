@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Leaf, Plus, ArrowUpRight, ShieldCheck } from 'lucide-react';
 import { FormEvent, useState } from 'react';
 import { DashboardLayout } from '@/components/layout/dashboard-layout';
+import { useAuth } from '@/context/auth-context';
 import { apiClient } from '@/lib/api-client';
 import type { CreatePlantCatalogDto } from '@/types';
 
@@ -20,25 +21,23 @@ function errorMessage(error: unknown): string {
 }
 
 export default function PlantCatalogPage() {
+  const { currentOrg, currentMembership } = useAuth();
   const queryClient = useQueryClient();
   const router = useRouter();
   const [isCreating, setIsCreating] = useState(false);
   const [formError, setFormError] = useState('');
   const [form, setForm] = useState<CreatePlantCatalogDto>({ code: '', scientificName: '', commonName: '', cultivar: '' });
 
-  const capabilityQuery = useQuery({
-    queryKey: ['platform-capabilities'],
-    queryFn: () => apiClient.getPlatformCapabilities(),
-  });
-  const canAdminister = capabilityQuery.data?.data.capabilities.plantCatalogAdmin === true;
+  const organizationId = currentOrg?.id;
+  const canAdminister = currentMembership?.role === 'OWNER' || currentMembership?.role === 'ADMIN';
   const catalogQuery = useQuery({
-    queryKey: ['plant-catalog', canAdminister ? 'admin' : 'public'],
-    queryFn: () => canAdminister ? apiClient.getPlantCatalogAdmin() : apiClient.getPlantCatalog(),
-    enabled: !capabilityQuery.isLoading && (capabilityQuery.isSuccess || (capabilityQuery.error as Error & { status?: number } | null)?.status !== 401),
+    queryKey: ['plant-catalog', organizationId],
+    queryFn: () => apiClient.getPlantCatalog(organizationId!),
+    enabled: Boolean(organizationId),
   });
 
   const createCatalog = useMutation({
-    mutationFn: (payload: CreatePlantCatalogDto) => apiClient.createPlantCatalog(payload),
+    mutationFn: (payload: CreatePlantCatalogDto) => apiClient.createPlantCatalog(organizationId!, payload),
     onSuccess: async (catalog) => {
       await queryClient.invalidateQueries({ queryKey: ['plant-catalog'] });
       setForm({ code: '', scientificName: '', commonName: '', cultivar: '' });
@@ -73,11 +72,7 @@ export default function PlantCatalogPage() {
           )}
         </header>
 
-        {capabilityQuery.isError && (capabilityQuery.error as Error & { status?: number }).status !== 401 && (
-          <div role="status" className="rounded-xl border border-amber-500/25 bg-amber-500/10 p-4 text-sm text-amber-200">
-            Status kapabilitas administratif tidak tersedia. Data tetap mengikuti izin baca server; aksi admin disembunyikan.
-          </div>
-        )}
+        {!organizationId && <div role="status" className="rounded-xl border border-amber-500/25 bg-amber-500/10 p-4 text-sm text-amber-200">Pilih organisasi untuk mengelola katalog tanaman.</div>}
 
         {isCreating && canAdminister && (
           <form onSubmit={submit} className="grid gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 sm:grid-cols-2">

@@ -41,7 +41,7 @@ export default function PlantProfilesPage() {
   });
   const catalogQuery = useQuery({
     queryKey: ['plant-catalog', 'profile-create'],
-    queryFn: () => apiClient.getPlantCatalog(),
+    queryFn: () => apiClient.getPlantCatalog(organizationId!),
     enabled: Boolean(organizationId && canManage && showCreate),
   });
   const catalogVersions = useMemo(() => (catalogQuery.data ?? []).flatMap((catalog) =>

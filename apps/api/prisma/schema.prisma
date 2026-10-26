@@ -178,6 +178,7 @@ model Organization {
   greenhouses Greenhouse[]
   memberships OrganizationMembership[]
   plantProfiles PlantProfile[]
+  plantCatalogs PlantCatalog[]
   plantProfileVersions PlantProfileVersion[]
   zonePlantAssignments ZonePlantAssignment[]
   plantConfigAuditEvents PlantConfigAuditEvent[]
@@ -409,16 +410,20 @@ model PlatformAdminGrant {
 
 model PlantCatalog {
   id             String              @id @default(cuid())
-  code           String              @unique
+  organizationId String?
+  code           String
   scientificName String
   commonName     String
   cultivar       String?
   status         PlantCatalogStatus  @default(ACTIVE)
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
+  organization   Organization?       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   versions       PlantCatalogVersion[]
   profiles       PlantProfile[]
 
+  @@unique([organizationId, code])
+  @@index([organizationId, status])
   @@map("plant_catalogs")
 }
 

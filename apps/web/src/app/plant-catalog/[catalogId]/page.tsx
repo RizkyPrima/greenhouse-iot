@@ -6,6 +6,7 @@ import { FormEvent, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Check, Leaf, LoaderCircle, Plus, Save, Trash2 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/dashboard-layout';
+import { useAuth } from '@/context/auth-context';
 import { apiClient } from '@/lib/api-client';
 import type { CreatePlantCatalogVersionDto, CreatePlantParameterDefinitionDto, PlantJsonObject, PlantParameterDefinition, UpdatePlantParameterDefinitionDto } from '@/types';
 
@@ -37,6 +38,7 @@ type ParameterForm = {
 const blankParameter: ParameterForm = { parameterKey: '', label: '', dataType: 'number', unit: '', valueSchema: '{\n  "type": "number"\n}', metadataSchema: '{}' };
 
 export default function PlantCatalogDetailPage() {
+  const { currentOrg, currentMembership } = useAuth();
   const params = useParams<{ catalogId: string }>();
   const catalogId = Array.isArray(params.catalogId) ? params.catalogId[0] : params.catalogId;
   const queryClient = useQueryClient();
@@ -49,12 +51,12 @@ export default function PlantCatalogDetailPage() {
   const [editingParameter, setEditingParameter] = useState<PlantParameterDefinition | null>(null);
   const [parameterError, setParameterError] = useState('');
 
-  const capabilityQuery = useQuery({ queryKey: ['platform-capabilities'], queryFn: () => apiClient.getPlatformCapabilities() });
-  const canAdminister = capabilityQuery.data?.data.capabilities.plantCatalogAdmin === true;
+  const organizationId = currentOrg?.id;
+  const canAdminister = currentMembership?.role === 'OWNER' || currentMembership?.role === 'ADMIN';
   const catalogQuery = useQuery({
-    queryKey: ['plant-catalog', catalogId, canAdminister ? 'admin' : 'public'],
-    queryFn: () => canAdminister ? apiClient.getPlantCatalogAdminItem(catalogId) : apiClient.getPlantCatalogItem(catalogId),
-    enabled: Boolean(catalogId) && !capabilityQuery.isLoading && (capabilityQuery.isSuccess || (capabilityQuery.error as Error & { status?: number } | null)?.status !== 401),
+    queryKey: ['plant-catalog', organizationId, catalogId],
+    queryFn: () => apiClient.getPlantCatalogItem(organizationId!, catalogId),
+    enabled: Boolean(organizationId && catalogId),
   });
 
   const invalidateCatalogs = async () => {
@@ -65,27 +67,27 @@ export default function PlantCatalogDetailPage() {
   };
 
   const createVersion = useMutation({
-    mutationFn: (payload: CreatePlantCatalogVersionDto) => apiClient.createPlantCatalogVersion(catalogId, payload),
+    mutationFn: (payload: CreatePlantCatalogVersionDto) => apiClient.createPlantCatalogVersion(organizationId!, catalogId, payload),
     onSuccess: async () => { setVersionError(''); await invalidateCatalogs(); },
     onError: (error) => setVersionError(apiError(error).message),
   });
   const createParameter = useMutation({
-    mutationFn: ({ versionId, payload }: { versionId: string; payload: CreatePlantParameterDefinitionDto }) => apiClient.createPlantParameterDefinition(versionId, payload),
+    mutationFn: ({ versionId, payload }: { versionId: string; payload: CreatePlantParameterDefinitionDto }) => apiClient.createPlantParameterDefinition(organizationId!, versionId, payload),
     onSuccess: async () => { setParameterError(''); setParameterForm(blankParameter); setParameterVersionId(null); await invalidateCatalogs(); },
     onError: (error) => setParameterError(apiError(error).message),
   });
   const updateParameter = useMutation({
-    mutationFn: ({ versionId, parameterId, payload }: { versionId: string; parameterId: string; payload: UpdatePlantParameterDefinitionDto }) => apiClient.updatePlantParameterDefinition(versionId, parameterId, payload),
+    mutationFn: ({ versionId, parameterId, payload }: { versionId: string; parameterId: string; payload: UpdatePlantParameterDefinitionDto }) => apiClient.updatePlantParameterDefinition(organizationId!, versionId, parameterId, payload),
     onSuccess: async () => { setParameterError(''); setEditingParameter(null); await invalidateCatalogs(); },
     onError: (error) => setParameterError(apiError(error).message),
   });
   const deleteParameter = useMutation({
-    mutationFn: ({ versionId, parameterId }: { versionId: string; parameterId: string }) => apiClient.deletePlantParameterDefinition(versionId, parameterId),
+    mutationFn: ({ versionId, parameterId }: { versionId: string; parameterId: string }) => apiClient.deletePlantParameterDefinition(organizationId!, versionId, parameterId),
     onSuccess: invalidateCatalogs,
     onError: (error) => setParameterError(apiError(error).message),
   });
   const publishVersion = useMutation({
-    mutationFn: (versionId: string) => apiClient.publishPlantCatalogVersion(versionId),
+    mutationFn: (versionId: string) => apiClient.publishPlantCatalogVersion(organizationId!, versionId),
     onSuccess: async () => { await invalidateCatalogs(); await queryClient.invalidateQueries({ queryKey: ['plant-catalog'] }); },
   });
 
@@ -146,8 +148,8 @@ export default function PlantCatalogDetailPage() {
     }
   }
 
-  const isLoading = capabilityQuery.isLoading || catalogQuery.isLoading;
-  const readError = capabilityQuery.isError ? apiError(capabilityQuery.error) : catalogQuery.isError ? apiError(catalogQuery.error) : null;
+  const isLoading = !organizationId || catalogQuery.isLoading;
+  const readError = catalogQuery.isError ? apiError(catalogQuery.error) : null;
 
   return (
     <DashboardLayout>

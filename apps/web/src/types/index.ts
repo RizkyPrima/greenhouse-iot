@@ -296,6 +296,7 @@ export interface PlantCatalogVersion {
 
 export interface PlantCatalog {
   id: string;
+  organizationId: string | null;
   code: string;
   scientificName: string;
   commonName: string;

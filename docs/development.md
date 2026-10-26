@@ -2,6 +2,8 @@
 
 Panduan operasional dan development backend API serta infrastruktur lokal.
 
+Runbook provisioning platform admin pertama tersedia di [Phase 10.4.2I](phase10-4-2i-platform-admin-bootstrap.md). Provisioning deployment-blocked sampai signer approval tepercaya tersedia; `JWT_SECRET` dan access token aplikasi bukan bukti approval. Verifikasi disposable target dan change-lock tetap prasyarat terpisah untuk integration test.
+
 ---
 
 ## 1. Arsitektur Komponen
@@ -51,9 +53,9 @@ Digunakan oleh Docker Compose untuk konfigurasi container:
 ```env
 COMPOSE_PROJECT_NAME=greenhouse
 POSTGRES_DB=greenhouse_db
-POSTGRES_USER=greenhouse_user
-POSTGRES_PASSWORD=Greenhouse@Dev2026
-REDIS_PASSWORD=Redis@Dev2026
+POSTGRES_USER=<local-db-user>
+POSTGRES_PASSWORD=<inject-from-local-secret-manager>
+REDIS_PASSWORD=<inject-from-local-secret-manager>
 ```
 
 ### Backend API Environment (`apps/api/.env`)
@@ -65,11 +67,13 @@ API_PORT=3001
 CORS_ORIGIN=http://localhost:3000
 
 # PostgreSQL Connection (Prisma)
-DATABASE_URL=postgresql://greenhouse_user:Greenhouse@Dev2026@localhost:5432/greenhouse_db
+DATABASE_URL=<inject-complete-database-url-from-secret-manager>
 
 # Redis Connection (ioredis)
-REDIS_URL=redis://:Redis@Dev2026@localhost:6379
+REDIS_URL=<inject-complete-redis-url-from-secret-manager>
 ```
+
+Nilai dalam kurung sudut adalah placeholder yang tidak dapat dipakai sebagai kredensial atau URL. Jangan menyalin secret ke dokumentasi, shell history, command-line arguments, atau Git. Gunakan secret manager/credential store lingkungan lokal atau deployment untuk menginjeksi `DATABASE_URL` dan `REDIS_URL` ke proses; batasi akses dan rotasi sesuai kebijakan lingkungan. File `.env` lokal harus diabaikan Git dan tidak dibagikan.
 
 > **Catatan Validasi Startup**:
 > NestJS memvalidasi environment variable saat startup menggunakan `class-validator`. Jika variabel wajib seperti `DATABASE_URL` tidak tersedia, aplikasi akan gagal startup secara eksplisit dengan pesan error yang jelas.

@@ -98,7 +98,7 @@ describe('Research grant management HTTP integration (isolated PostgreSQL)', () 
   const testOrganizationIds = new Set<string>();
 
   async function createUser(label: string, isActive = true) {
-    const id = `research-grants-e2e-${label}-${randomUUID()}`;
+    const id = `rg-e2e-${label}-${randomUUID()}`;
     const user = await prisma.user.create({
       data: {
         id,

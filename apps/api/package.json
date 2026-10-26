@@ -20,7 +20,9 @@
     "test:cov": "vitest run --coverage",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
+    "test:bootstrap-integration": "vitest run --config ./vitest.config.bootstrap-integration.ts",
     "db:seed": "npx tsx --env-file=.env prisma/seed.ts",
+    "bootstrap:research-grant-admin": "npx tsx scripts/bootstrap-platform-admin.ts",
     "simulate:telemetry": "npx tsx --env-file=.env scripts/simulate-telemetry.ts"
   },
   "dependencies": {

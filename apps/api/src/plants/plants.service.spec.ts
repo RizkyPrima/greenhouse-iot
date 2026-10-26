@@ -65,27 +65,58 @@ describe('PlantsService tenant access', () => {
   });
 });
 
-describe('PlantsService platform catalog reads', () => {
-  it('includes unpublished catalogs and every version for guarded admin listing', async () => {
-    const findMany = vi.fn().mockResolvedValue([]);
-    const service = new PlantsService({ plantCatalog: { findMany } } as never, {} as never);
+describe('PlantsService organization catalog access', () => {
+  const owner = { ...actor, role: UserRole.OWNER } as AuthenticatedUser;
 
-    await expect(service.listCatalogForAdmin()).resolves.toEqual([]);
-    expect(findMany).toHaveBeenCalledWith({
-      include: { versions: { orderBy: { version: 'desc' }, include: { parameterDefinitions: true } } },
-      orderBy: { commonName: 'asc' },
-    });
+  it('creates a catalog owned by the selected organization and records its audit event', async () => {
+    const catalog = { id: 'catalog-a', organizationId: 'org-a' };
+    const tx = {
+      plantCatalog: { create: vi.fn().mockResolvedValue(catalog) },
+      plantConfigAuditEvent: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const service = new PlantsService(
+      { $transaction: vi.fn((work: (client: typeof tx) => unknown) => work(tx)) } as never,
+      { getMembership: vi.fn().mockResolvedValue({ role: UserRole.OWNER }), organizationExists: vi.fn().mockResolvedValue(true) } as never,
+    );
+
+    await expect(service.createCatalog('org-a', { code: 'Basil', scientificName: 'Ocimum basilicum', commonName: 'Basil' }, owner))
+      .resolves.toEqual(catalog);
+    expect(tx.plantCatalog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ organizationId: 'org-a', code: 'basil' }) }));
+    expect(tx.plantConfigAuditEvent.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ organizationId: 'org-a', action: 'CATALOG_CREATED' }) }));
   });
 
-  it('loads the requested catalog including drafts for guarded admin detail', async () => {
-    const findUnique = vi.fn().mockResolvedValue({ id: 'catalog-1', versions: [{ status: 'DRAFT' }] });
-    const service = new PlantsService({ plantCatalog: { findUnique } } as never, {} as never);
+  it('rejects non-owner/admin catalog creation before writing', async () => {
+    const create = vi.fn();
+    const service = new PlantsService(
+      { $transaction: vi.fn(), plantCatalog: { create } } as never,
+      { getMembership: vi.fn().mockResolvedValue({ role: UserRole.VIEWER }), organizationExists: vi.fn().mockResolvedValue(true) } as never,
+    );
 
-    await expect(service.getCatalogForAdmin('catalog-1')).resolves.toMatchObject({ id: 'catalog-1' });
-    expect(findUnique).toHaveBeenCalledWith({
-      where: { id: 'catalog-1' },
-      include: { versions: { orderBy: { version: 'desc' }, include: { parameterDefinitions: true } } },
-    });
+    await expect(service.createCatalog('org-a', { code: 'basil', scientificName: 'Ocimum basilicum', commonName: 'Basil' }, owner))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('scopes catalog listing and draft visibility to the selected organization', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const service = new PlantsService(
+      { plantCatalog: { findMany } } as never,
+      { getMembership: vi.fn().mockResolvedValue({ role: UserRole.OWNER }), organizationExists: vi.fn().mockResolvedValue(true) } as never,
+    );
+
+    await expect(service.listCatalogForOrganization('org-a', owner)).resolves.toEqual([]);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { organizationId: 'org-a' } }));
+  });
+
+  it('does not query catalogs if the caller is not an organization member', async () => {
+    const findMany = vi.fn();
+    const service = new PlantsService(
+      { plantCatalog: { findMany } } as never,
+      { getMembership: vi.fn().mockRejectedValue(new ForbiddenException()), organizationExists: vi.fn() } as never,
+    );
+
+    await expect(service.listCatalogForOrganization('org-b', owner)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(findMany).not.toHaveBeenCalled();
   });
 });
 

@@ -323,48 +323,40 @@ class ApiClient {
   }
 
   // ── Plant Standardization Endpoints ──────────────────────────────────────
-  async getPlantCatalog(): Promise<PlantCatalog[]> {
-    return this.request('/plant-catalog');
+  async getPlantCatalog(organizationId: string): Promise<PlantCatalog[]> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog`);
   }
 
-  async getPlantCatalogAdmin(): Promise<PlantCatalog[]> {
-    return this.request('/plant-catalog/admin');
+  async getPlantCatalogItem(organizationId: string, catalogId: string): Promise<PlantCatalog> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/${encodeURIComponent(catalogId)}`);
   }
 
-  async getPlantCatalogItem(catalogId: string): Promise<PlantCatalog> {
-    return this.request(`/plant-catalog/${encodeURIComponent(catalogId)}`);
+  async createPlantCatalog(organizationId: string, payload: CreatePlantCatalogDto): Promise<PlantCatalog> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog`, { method: 'POST', body: JSON.stringify(payload) });
   }
 
-  async getPlantCatalogAdminItem(catalogId: string): Promise<PlantCatalog> {
-    return this.request(`/plant-catalog/admin/${encodeURIComponent(catalogId)}`);
+  async createPlantCatalogVersion(organizationId: string, catalogId: string, payload: CreatePlantCatalogVersionDto): Promise<PlantCatalogVersion> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/${encodeURIComponent(catalogId)}/versions`, { method: 'POST', body: JSON.stringify(payload) });
   }
 
-  async createPlantCatalog(payload: CreatePlantCatalogDto): Promise<PlantCatalog> {
-    return this.request('/plant-catalog', { method: 'POST', body: JSON.stringify(payload) });
+  async updatePlantCatalogVersion(organizationId: string, versionId: string, payload: UpdatePlantCatalogVersionDto): Promise<PlantCatalogVersion> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/versions/${encodeURIComponent(versionId)}/draft`, { method: 'PATCH', body: JSON.stringify(payload) });
   }
 
-  async createPlantCatalogVersion(catalogId: string, payload: CreatePlantCatalogVersionDto): Promise<PlantCatalogVersion> {
-    return this.request(`/plant-catalog/${encodeURIComponent(catalogId)}/versions`, { method: 'POST', body: JSON.stringify(payload) });
+  async createPlantParameterDefinition(organizationId: string, versionId: string, payload: CreatePlantParameterDefinitionDto): Promise<PlantParameterDefinition> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/versions/${encodeURIComponent(versionId)}/parameters`, { method: 'POST', body: JSON.stringify(payload) });
   }
 
-  async updatePlantCatalogVersion(versionId: string, payload: UpdatePlantCatalogVersionDto): Promise<PlantCatalogVersion> {
-    return this.request(`/plant-catalog/versions/${encodeURIComponent(versionId)}/draft`, { method: 'PATCH', body: JSON.stringify(payload) });
+  async updatePlantParameterDefinition(organizationId: string, versionId: string, parameterId: string, payload: UpdatePlantParameterDefinitionDto): Promise<PlantParameterDefinition> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/versions/${encodeURIComponent(versionId)}/parameters/${encodeURIComponent(parameterId)}`, { method: 'PATCH', body: JSON.stringify(payload) });
   }
 
-  async createPlantParameterDefinition(versionId: string, payload: CreatePlantParameterDefinitionDto): Promise<PlantParameterDefinition> {
-    return this.request(`/plant-catalog/versions/${encodeURIComponent(versionId)}/parameters`, { method: 'POST', body: JSON.stringify(payload) });
+  async deletePlantParameterDefinition(organizationId: string, versionId: string, parameterId: string): Promise<{ id: string; deleted: true }> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/versions/${encodeURIComponent(versionId)}/parameters/${encodeURIComponent(parameterId)}`, { method: 'DELETE' });
   }
 
-  async updatePlantParameterDefinition(versionId: string, parameterId: string, payload: UpdatePlantParameterDefinitionDto): Promise<PlantParameterDefinition> {
-    return this.request(`/plant-catalog/versions/${encodeURIComponent(versionId)}/parameters/${encodeURIComponent(parameterId)}`, { method: 'PATCH', body: JSON.stringify(payload) });
-  }
-
-  async deletePlantParameterDefinition(versionId: string, parameterId: string): Promise<{ id: string; deleted: true }> {
-    return this.request(`/plant-catalog/versions/${encodeURIComponent(versionId)}/parameters/${encodeURIComponent(parameterId)}`, { method: 'DELETE' });
-  }
-
-  async publishPlantCatalogVersion(versionId: string): Promise<PlantCatalogVersion> {
-    return this.request(`/plant-catalog/versions/${encodeURIComponent(versionId)}/publish`, { method: 'POST' });
+  async publishPlantCatalogVersion(organizationId: string, versionId: string): Promise<PlantCatalogVersion> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/versions/${encodeURIComponent(versionId)}/publish`, { method: 'POST' });
   }
 
   async createPlatformAdminGrant(payload: CreatePlatformGrantDto): Promise<PlatformAdminGrant> {

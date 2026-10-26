@@ -6,6 +6,7 @@ import { FormEvent, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, CheckCircle2, Clock3, Leaf, Plus, Save, Sprout } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/dashboard-layout';
+import { PlantProfileVersionDiff } from '@/components/plants/plant-profile-version-diff';
 import { useAuth } from '@/context/auth-context';
 import { apiClient } from '@/lib/api-client';
 import type { CreateGrowthStageDto, PlantJsonObject, PlantProfileVersion, UpdateGrowthStageDto } from '@/types';
@@ -56,8 +57,8 @@ export default function PlantProfileDetailPage() {
   });
   const catalogQuery = useQuery({
     queryKey: ['plant-catalog', 'profile-source', profileQuery.data?.plantCatalogId],
-    queryFn: () => apiClient.getPlantCatalogItem(profileQuery.data!.plantCatalogId),
-    enabled: Boolean(profileQuery.data?.plantCatalogId),
+    queryFn: () => apiClient.getPlantCatalogItem(profileQuery.data!.organizationId, profileQuery.data!.plantCatalogId),
+    enabled: Boolean(profileQuery.data?.plantCatalog?.organizationId === organizationId),
   });
 
   const invalidateProfile = async () => queryClient.invalidateQueries({ queryKey: ['plant-profile', organizationId, profileId] });
@@ -147,6 +148,8 @@ export default function PlantProfileDetailPage() {
                 {canManage && canCreateVersion && catalogQuery.isSuccess && availableCatalogVersions.length > 0 && <section className="flex flex-col gap-3 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-5 sm:flex-row sm:items-end sm:justify-between"><div className="flex-1"><h2 className="font-semibold text-sky-100">Adopsi versi katalog baru</h2><p className="mt-1 text-xs text-slate-400">Membuat draft baru dengan konfigurasi organisasi yang diturunkan dari versi tervalidasi terakhir.</p><select value={adoptionVersionId} onChange={(event) => setAdoptionVersionId(event.target.value)} className="mt-3 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100"><option value="">Pilih versi katalog</option>{availableCatalogVersions.map((version) => <option key={version.id} value={version.id}>v{version.version} · {version.status} · {version.id.slice(0, 8)}</option>)}</select></div><button type="button" disabled={!adoptionVersionId || adoptVersion.isPending} onClick={() => { if (adoptionVersionId && window.confirm('Adopsi versi katalog ini dan buat draft profil baru?')) adoptVersion.mutate(adoptionVersionId); }} className="rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">{adoptVersion.isPending ? 'Mengadopsi…' : 'Adopsi versi'}</button></section>}
 
                 {(actionError || validationNotice) && <div role={actionError ? 'alert' : 'status'} className={`rounded-xl border p-4 text-sm ${actionError ? 'border-rose-500/25 bg-rose-500/10 text-rose-200' : 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'}`}>{actionError || validationNotice}</div>}
+
+                <PlantProfileVersionDiff versions={versions} />
 
                 <section className="space-y-4"><div><h2 className="text-lg font-semibold text-white">Riwayat versi</h2><p className="mt-1 text-sm text-slate-400">Versi terbaru ditampilkan lebih dahulu. Perubahan hanya tersedia pada DRAFT.</p></div>
                   {!versions.length ? <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-sm text-slate-400">Profil belum memiliki versi.</div> : versions.map((version) => {

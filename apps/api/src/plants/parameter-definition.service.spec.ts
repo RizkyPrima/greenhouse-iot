@@ -32,15 +32,19 @@ function makeService(overrides: Record<string, unknown> = {}) {
     },
     plantConfigAuditEvent: { create: vi.fn().mockResolvedValue({}) },
   };
-  const prisma = { $transaction: vi.fn((work: (client: typeof tx) => unknown) => work(tx)) };
-  return { service: new PlantsService(prisma as never, {} as never), tx };
+  const prisma = {
+    plantCatalogVersion: { findFirst: vi.fn().mockResolvedValue({ id: draftVersion.id }) },
+    $transaction: vi.fn((work: (client: typeof tx) => unknown) => work(tx)),
+  };
+  const authorization = { getMembership: vi.fn().mockResolvedValue({ role: 'OWNER' }), organizationExists: vi.fn().mockResolvedValue(true) };
+  return { service: new PlantsService(prisma as never, authorization as never), tx };
 }
 
 describe('Plant parameter definition draft workflow', () => {
   it('allows editing a parameter on a draft catalog version and writes an audit event', async () => {
     const { service, tx } = makeService();
 
-    await expect(service.updateParameterDefinition(draftVersion.id, definition.id, { label: 'Air temperature' }, actor))
+    await expect(service.updateParameterDefinition('org-a', draftVersion.id, definition.id, { label: 'Air temperature' }, actor))
       .resolves.toMatchObject({ label: 'Air temperature' });
 
     expect(tx.plantParameterDefinition.update).toHaveBeenCalledWith(expect.objectContaining({
@@ -55,7 +59,7 @@ describe('Plant parameter definition draft workflow', () => {
   it('allows deleting an unused parameter from a draft and audits the deletion', async () => {
     const { service, tx } = makeService({ plantParameterDefinition: { findMany: vi.fn().mockResolvedValue([]) } });
 
-    await expect(service.deleteParameterDefinition(draftVersion.id, definition.id, actor))
+    await expect(service.deleteParameterDefinition('org-a', draftVersion.id, definition.id, actor))
       .resolves.toEqual({ id: definition.id, deleted: true });
     expect(tx.plantParameterDefinition.delete).toHaveBeenCalledWith({ where: { id: definition.id } });
     expect(tx.plantConfigAuditEvent.create).toHaveBeenCalledWith(expect.objectContaining({
@@ -67,9 +71,9 @@ describe('Plant parameter definition draft workflow', () => {
     const published = { ...definition, plantCatalogVersion: { ...draftVersion, status: 'PUBLISHED' } };
     const { service, tx } = makeService({ plantParameterDefinition: { findFirst: vi.fn().mockResolvedValue(published) } });
 
-    await expect(service.updateParameterDefinition(draftVersion.id, definition.id, { label: 'Changed' }, actor))
+    await expect(service.updateParameterDefinition('org-a', draftVersion.id, definition.id, { label: 'Changed' }, actor))
       .rejects.toBeInstanceOf(ConflictException);
-    await expect(service.deleteParameterDefinition(draftVersion.id, definition.id, actor))
+    await expect(service.deleteParameterDefinition('org-a', draftVersion.id, definition.id, actor))
       .rejects.toBeInstanceOf(ConflictException);
     expect(tx.plantParameterDefinition.update).not.toHaveBeenCalled();
     expect(tx.plantParameterDefinition.delete).not.toHaveBeenCalled();
@@ -78,18 +82,18 @@ describe('Plant parameter definition draft workflow', () => {
   it('returns not found when the parameter does not belong to the requested version', async () => {
     const { service } = makeService({ plantParameterDefinition: { findFirst: vi.fn().mockResolvedValue(null) } });
 
-    await expect(service.updateParameterDefinition(draftVersion.id, 'missing', { label: 'Changed' }, actor))
+    await expect(service.updateParameterDefinition('org-a', draftVersion.id, 'missing', { label: 'Changed' }, actor))
       .rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.deleteParameterDefinition(draftVersion.id, 'missing', actor))
+    await expect(service.deleteParameterDefinition('org-a', draftVersion.id, 'missing', actor))
       .rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('rejects invalid keys, schemas, and impossible bounds', async () => {
     const { service, tx } = makeService();
 
-    await expect(service.updateParameterDefinition(draftVersion.id, definition.id, { parameterKey: 'Bad-Key' }, actor))
+    await expect(service.updateParameterDefinition('org-a', draftVersion.id, definition.id, { parameterKey: 'Bad-Key' }, actor))
       .rejects.toBeInstanceOf(UnprocessableEntityException);
-    await expect(service.updateParameterDefinition(draftVersion.id, definition.id, {
+    await expect(service.updateParameterDefinition('org-a', draftVersion.id, definition.id, {
       valueSchema: { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'number', minimum: 20, maximum: 10 },
     }, actor)).rejects.toBeInstanceOf(UnprocessableEntityException);
     expect(tx.plantParameterDefinition.update).not.toHaveBeenCalled();
@@ -99,7 +103,7 @@ describe('Plant parameter definition draft workflow', () => {
     const inUse = { ...definition, plantCatalogVersion: { ...draftVersion, profileDefaults: { temperature: 22 } } };
     const { service, tx } = makeService({ plantParameterDefinition: { findFirst: vi.fn().mockResolvedValue(inUse) } });
 
-    await expect(service.deleteParameterDefinition(draftVersion.id, definition.id, actor))
+    await expect(service.deleteParameterDefinition('org-a', draftVersion.id, definition.id, actor))
       .rejects.toBeInstanceOf(ConflictException);
     expect(tx.plantParameterDefinition.delete).not.toHaveBeenCalled();
   });
@@ -108,7 +112,7 @@ describe('Plant parameter definition draft workflow', () => {
     const inUse = { ...definition, plantCatalogVersion: { ...draftVersion, profileDefaults: { temperature: 22 } } };
     const { service, tx } = makeService({ plantParameterDefinition: { findFirst: vi.fn().mockResolvedValue(inUse) } });
 
-    await expect(service.updateParameterDefinition(draftVersion.id, definition.id, { parameterKey: 'airTemperature' }, actor))
+    await expect(service.updateParameterDefinition('org-a', draftVersion.id, definition.id, { parameterKey: 'airTemperature' }, actor))
       .rejects.toBeInstanceOf(ConflictException);
     expect(tx.plantParameterDefinition.update).not.toHaveBeenCalled();
   });

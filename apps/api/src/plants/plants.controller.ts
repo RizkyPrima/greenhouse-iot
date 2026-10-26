@@ -26,68 +26,49 @@ import { PlantsService } from './plants.service.js';
 export class PlantsController {
   constructor(private readonly plants: PlantsService) {}
 
-  @Get('plant-catalog')
-  listCatalog() {
-    return this.plants.listCatalog();
+  @Get('organizations/:organizationId/plant-catalog')
+  listOrganizationCatalog(@Param('organizationId') organizationId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.listCatalogForOrganization(organizationId, user);
   }
 
-  @Get('plant-catalog/admin')
-  @UseGuards(PlatformAdminGuard)
-  listCatalogForAdmin() {
-    return this.plants.listCatalogForAdmin();
+  @Get('organizations/:organizationId/plant-catalog/:catalogId')
+  getOrganizationCatalog(@Param('organizationId') organizationId: string, @Param('catalogId') catalogId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.getCatalogForOrganization(organizationId, catalogId, user);
   }
 
-  @Get('plant-catalog/admin/:catalogId')
-  @UseGuards(PlatformAdminGuard)
-  getCatalogForAdmin(@Param('catalogId') catalogId: string) {
-    return this.plants.getCatalogForAdmin(catalogId);
+  @Post('organizations/:organizationId/plant-catalog')
+  createCatalog(@Param('organizationId') organizationId: string, @Body() dto: CreatePlantCatalogDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.createCatalog(organizationId, dto, user);
   }
 
-  @Get('plant-catalog/:catalogId')
-  getCatalog(@Param('catalogId') catalogId: string) {
-    return this.plants.getCatalog(catalogId);
+  @Post('organizations/:organizationId/plant-catalog/:catalogId/versions')
+  createCatalogVersion(@Param('organizationId') organizationId: string, @Param('catalogId') id: string, @Body() dto: CreateCatalogVersionDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.createCatalogVersion(organizationId, id, dto, user);
   }
 
-  @Post('plant-catalog')
-  @UseGuards(PlatformAdminGuard)
-  createCatalog(@Body() dto: CreatePlantCatalogDto, @CurrentUser() user: AuthenticatedUser) {
-    return this.plants.createCatalog(dto, user);
+  @Patch('organizations/:organizationId/plant-catalog/versions/:versionId/draft')
+  updateCatalogVersion(@Param('organizationId') organizationId: string, @Param('versionId') id: string, @Body() dto: UpdateCatalogVersionDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.updateCatalogVersion(organizationId, id, dto, user);
   }
 
-  @Post('plant-catalog/:catalogId/versions')
-  @UseGuards(PlatformAdminGuard)
-  createCatalogVersion(@Param('catalogId') id: string, @Body() dto: CreateCatalogVersionDto, @CurrentUser() user: AuthenticatedUser) {
-    return this.plants.createCatalogVersion(id, dto, user);
+  @Post('organizations/:organizationId/plant-catalog/versions/:versionId/parameters')
+  createParameter(@Param('organizationId') organizationId: string, @Param('versionId') id: string, @Body() dto: CreateParameterDefinitionDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.createParameterDefinition(organizationId, id, dto, user);
   }
 
-  @Patch('plant-catalog/versions/:versionId/draft')
-  @UseGuards(PlatformAdminGuard)
-  updateCatalogVersion(@Param('versionId') id: string, @Body() dto: UpdateCatalogVersionDto, @CurrentUser() user: AuthenticatedUser) {
-    return this.plants.updateCatalogVersion(id, dto, user);
+  @Patch('organizations/:organizationId/plant-catalog/versions/:versionId/parameters/:parameterId')
+  updateParameter(@Param('organizationId') organizationId: string, @Param('versionId') versionId: string, @Param('parameterId') parameterId: string, @Body() dto: UpdateParameterDefinitionDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.updateParameterDefinition(organizationId, versionId, parameterId, dto, user);
   }
 
-  @Post('plant-catalog/versions/:versionId/parameters')
-  @UseGuards(PlatformAdminGuard)
-  createParameter(@Param('versionId') id: string, @Body() dto: CreateParameterDefinitionDto, @CurrentUser() user: AuthenticatedUser) {
-    return this.plants.createParameterDefinition(id, dto, user);
+  @Delete('organizations/:organizationId/plant-catalog/versions/:versionId/parameters/:parameterId')
+  deleteParameter(@Param('organizationId') organizationId: string, @Param('versionId') versionId: string, @Param('parameterId') parameterId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.deleteParameterDefinition(organizationId, versionId, parameterId, user);
   }
 
-  @Patch('plant-catalog/versions/:versionId/parameters/:parameterId')
-  @UseGuards(PlatformAdminGuard)
-  updateParameter(@Param('versionId') versionId: string, @Param('parameterId') parameterId: string, @Body() dto: UpdateParameterDefinitionDto, @CurrentUser() user: AuthenticatedUser) {
-    return this.plants.updateParameterDefinition(versionId, parameterId, dto, user);
-  }
-
-  @Delete('plant-catalog/versions/:versionId/parameters/:parameterId')
-  @UseGuards(PlatformAdminGuard)
-  deleteParameter(@Param('versionId') versionId: string, @Param('parameterId') parameterId: string, @CurrentUser() user: AuthenticatedUser) {
-    return this.plants.deleteParameterDefinition(versionId, parameterId, user);
-  }
-
-  @Post('plant-catalog/versions/:versionId/publish')
-  @UseGuards(PlatformAdminGuard)
-  publishCatalogVersion(@Param('versionId') id: string, @CurrentUser() user: AuthenticatedUser) {
-    return this.plants.publishCatalogVersion(id, user);
+  @Post('organizations/:organizationId/plant-catalog/versions/:versionId/publish')
+  publishCatalogVersion(@Param('organizationId') organizationId: string, @Param('versionId') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.publishCatalogVersion(organizationId, id, user);
   }
 
   // Grant provisioning intentionally has no public/bootstrap endpoint. An existing platform admin

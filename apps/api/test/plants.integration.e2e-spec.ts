@@ -83,16 +83,12 @@ describe('Plants API HTTP integration (isolated PostgreSQL)', () => {
     await Promise.all(memberships.map(([key, organizationId, role]) => prisma.organizationMembership.create({
       data: { userId: users[key].id, organizationId, role },
     })));
-    await prisma.platformAdminGrant.create({
-      data: { userId: users.platform.id, permission: 'PLANT_CATALOG_ADMIN', grantedByUserId: users.platform.id },
-    });
-
     const greenhouseA = await prisma.greenhouse.create({ data: { organizationId: organizationA.id, name: 'Greenhouse A', code: `GHA-${runId}`, timezone: 'Asia/Jakarta' } });
     const greenhouseB = await prisma.greenhouse.create({ data: { organizationId: organizationB.id, name: 'Greenhouse B', code: `GHB-${runId}`, timezone: 'Asia/Jakarta' } });
     const zoneA = await prisma.zone.create({ data: { greenhouseId: greenhouseA.id, name: 'Zone A', code: `ZA-${runId}` } });
     const zoneB = await prisma.zone.create({ data: { greenhouseId: greenhouseB.id, name: 'Zone B', code: `ZB-${runId}` } });
 
-    const catalog = await prisma.plantCatalog.create({ data: { code: `plant-${runId}`, scientificName: 'Testus plantus', commonName: `Test Plant ${runId}` } });
+    const catalog = await prisma.plantCatalog.create({ data: { organizationId: organizationA.id, code: `plant-${runId}`, scientificName: 'Testus plantus', commonName: `Test Plant ${runId}` } });
     const catalogVersion = await prisma.plantCatalogVersion.create({
       data: {
         plantCatalogId: catalog.id,
@@ -118,8 +114,23 @@ describe('Plants API HTTP integration (isolated PostgreSQL)', () => {
       data: { status: PlantVersionStatus.PUBLISHED, publishedByUserId: users.platform.id, publishedAt: new Date() },
     });
 
+    const catalogB = await prisma.plantCatalog.create({ data: { organizationId: organizationB.id, code: `plant-b-${runId}`, scientificName: 'Testus plantus', commonName: `Test Plant B ${runId}` } });
+    const catalogVersionB = await prisma.plantCatalogVersion.create({
+      data: {
+        plantCatalogId: catalogB.id, version: 1, status: PlantVersionStatus.PUBLISHED,
+        configSchemaVersion: 'plant-config/v1', profileDefaults: { temperature: 20 }, stageTemplates: [],
+        checksum: `catalog-b-${runId}`, createdByUserId: users.platform.id,
+        publishedByUserId: users.platform.id, publishedAt: new Date(),
+        parameterDefinitions: { create: [{
+          parameterKey: 'temperature', label: 'Temperature', dataType: 'number', unit: 'C',
+          valueSchema: { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'number', minimum: 0, maximum: 50 },
+          metadataSchema: { required: true },
+        }] },
+      },
+    });
+
     const profileA = await seedProfile(organizationA.id, users.ownerA.id, 'a', catalog.id, catalogVersion.id);
-    const profileB = await seedProfile(organizationB.id, users.ownerB.id, 'b', catalog.id, catalogVersion.id);
+    const profileB = await seedProfile(organizationB.id, users.ownerB.id, 'b', catalogB.id, catalogVersionB.id);
     const assignmentB = await prisma.zonePlantAssignment.create({
       data: {
         zoneId: zoneB.id,
@@ -232,43 +243,41 @@ describe('Plants API HTTP integration (isolated PostgreSQL)', () => {
     expect(await prisma.zoneParameterOverride.count({ where: { assignmentId: ids.assignmentB } })).toBe(1);
   });
 
-  it('requires an active platform grant, blocks self-grant, and stops authorization after revocation', async () => {
-    await request(app.getHttpServer()).post('/api/plant-catalog').set(auth('delegate')).send({ code: `nogrant-${runId}`, scientificName: 'No grant', commonName: 'No grant' }).expect(403);
-    await request(app.getHttpServer()).post('/api/platform-admin-grants').set(auth('platform')).send({ userId: 'plant-e2e-platform-' + runId }).expect(403);
-    const grant = await request(app.getHttpServer()).post('/api/platform-admin-grants').set(auth('platform')).send({ userId: `plant-e2e-delegate-${runId}` }).expect(201);
-    await request(app.getHttpServer()).post('/api/plant-catalog').set(auth('delegate')).send({ code: `grant-${runId}`, scientificName: 'Granted', commonName: 'Granted' }).expect(201);
-    await request(app.getHttpServer()).patch(`/api/platform-admin-grants/${grant.body.id}/revoke`).set(auth('platform')).expect(200);
-    await request(app.getHttpServer()).post('/api/plant-catalog').set(auth('delegate')).send({ code: `revoked-${runId}`, scientificName: 'Revoked', commonName: 'Revoked' }).expect(403);
-    await request(app.getHttpServer()).get(`/api/organizations/${ids.orgA}/plant-profiles`).set(auth('platform')).expect(403);
+  it('lets organization owners manage only their own catalogs, independently of platform grants', async () => {
+    const created = await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-catalog`).set(auth('ownerA'))
+      .send({ code: `tenant-${runId}`, scientificName: 'Tenant plant', commonName: 'Tenant Plant' }).expect(201);
+    await request(app.getHttpServer()).get(`/api/organizations/${ids.orgB}/plant-catalog/${created.body.id}`).set(auth('ownerB')).expect(404);
+    await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-catalog`).set(auth('platform'))
+      .send({ code: `no-membership-${runId}`, scientificName: 'No membership', commonName: 'Denied' }).expect(403);
   });
 
   it('supports draft parameter PATCH/DELETE, rejects invalid schemas and protects referenced keys', async () => {
-    const catalog = await request(app.getHttpServer()).post('/api/plant-catalog').set(auth('platform')).send({ code: `params-${runId}`, scientificName: 'Parameter test', commonName: 'Parameter test' }).expect(201);
-    const draft = await request(app.getHttpServer()).post(`/api/plant-catalog/${catalog.body.id}/versions`).set(auth('platform')).send({ profileDefaults: {}, stageTemplates: [] }).expect(201);
+    const catalog = await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-catalog`).set(auth('ownerA')).send({ code: `params-${runId}`, scientificName: 'Parameter test', commonName: 'Parameter test' }).expect(201);
+    const draft = await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-catalog/${catalog.body.id}/versions`).set(auth('ownerA')).send({ profileDefaults: {}, stageTemplates: [] }).expect(201);
     const parameterDto = {
       parameterKey: 'nutrientLevel', label: 'Nutrient level', dataType: 'number', unit: 'ppm',
       valueSchema: { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'number', minimum: 0, maximum: 100 },
       metadataSchema: { required: false },
     };
-    const parameter = await request(app.getHttpServer()).post(`/api/plant-catalog/versions/${draft.body.id}/parameters`).set(auth('platform')).send(parameterDto).expect(201);
-    await request(app.getHttpServer()).patch(`/api/plant-catalog/versions/${draft.body.id}/parameters/${parameter.body.id}`).set(auth('platform')).send({ label: 'Nutrient ppm' }).expect(200);
+    const parameter = await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-catalog/versions/${draft.body.id}/parameters`).set(auth('ownerA')).send(parameterDto).expect(201);
+    await request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/plant-catalog/versions/${draft.body.id}/parameters/${parameter.body.id}`).set(auth('ownerA')).send({ label: 'Nutrient ppm' }).expect(200);
     expect((await prisma.plantParameterDefinition.findUnique({ where: { id: parameter.body.id } }))?.label).toBe('Nutrient ppm');
-    await request(app.getHttpServer()).delete(`/api/plant-catalog/versions/${draft.body.id}/parameters/${parameter.body.id}`).set(auth('platform')).expect(200);
+    await request(app.getHttpServer()).delete(`/api/organizations/${ids.orgA}/plant-catalog/versions/${draft.body.id}/parameters/${parameter.body.id}`).set(auth('ownerA')).expect(200);
     expect(await prisma.plantParameterDefinition.findUnique({ where: { id: parameter.body.id } })).toBeNull();
-    await request(app.getHttpServer()).post(`/api/plant-catalog/versions/${draft.body.id}/parameters`).set(auth('platform')).send({ ...parameterDto, parameterKey: 'badKey', valueSchema: { type: 'number' } }).expect(422);
+    await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-catalog/versions/${draft.body.id}/parameters`).set(auth('ownerA')).send({ ...parameterDto, parameterKey: 'badKey', valueSchema: { type: 'number' } }).expect(422);
 
-    const dependentDraft = await request(app.getHttpServer()).post(`/api/plant-catalog/${catalog.body.id}/versions`).set(auth('platform')).send({ profileDefaults: { nutrientLevel: 20 }, stageTemplates: [] }).expect(201);
-    const dependent = await request(app.getHttpServer()).post(`/api/plant-catalog/versions/${dependentDraft.body.id}/parameters`).set(auth('platform')).send(parameterDto).expect(201);
-    await request(app.getHttpServer()).delete(`/api/plant-catalog/versions/${dependentDraft.body.id}/parameters/${dependent.body.id}`).set(auth('platform')).expect(409);
+    const dependentDraft = await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-catalog/${catalog.body.id}/versions`).set(auth('ownerA')).send({ profileDefaults: { nutrientLevel: 20 }, stageTemplates: [] }).expect(201);
+    const dependent = await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-catalog/versions/${dependentDraft.body.id}/parameters`).set(auth('ownerA')).send(parameterDto).expect(201);
+    await request(app.getHttpServer()).delete(`/api/organizations/${ids.orgA}/plant-catalog/versions/${dependentDraft.body.id}/parameters/${dependent.body.id}`).set(auth('ownerA')).expect(409);
     expect(await prisma.plantParameterDefinition.findUnique({ where: { id: dependent.body.id } })).not.toBeNull();
-    await request(app.getHttpServer()).post(`/api/plant-catalog/versions/${ids.catalogVersion}/parameters`).set(auth('platform')).send(parameterDto).expect(409);
+    await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-catalog/versions/${ids.catalogVersion}/parameters`).set(auth('ownerA')).send(parameterDto).expect(409);
   });
 
   it('protects validated profile versions and published catalog versions from draft edits', async () => {
     await request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/plant-profile-versions/${ids.validVersionA}/draft`).set(auth('ownerA')).send({ profileConfig: { temperature: 30 } }).expect(409);
-    await request(app.getHttpServer()).patch(`/api/plant-catalog/versions/${ids.catalogVersion}/draft`).set(auth('platform')).send({ profileDefaults: { temperature: 30 } }).expect(409);
+    await request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/plant-catalog/versions/${ids.catalogVersion}/draft`).set(auth('ownerA')).send({ profileDefaults: { temperature: 30 } }).expect(409);
     const definition = await prisma.plantParameterDefinition.findFirst({ where: { plantCatalogVersionId: ids.catalogVersion } });
-    if (definition) await request(app.getHttpServer()).delete(`/api/plant-catalog/versions/${ids.catalogVersion}/parameters/${definition.id}`).set(auth('platform')).expect(409);
+    if (definition) await request(app.getHttpServer()).delete(`/api/organizations/${ids.orgA}/plant-catalog/versions/${ids.catalogVersion}/parameters/${definition.id}`).set(auth('ownerA')).expect(409);
   });
 
   it('validates draft configuration, rejects invalid activation, and persists valid activation/override/audit changes', async () => {

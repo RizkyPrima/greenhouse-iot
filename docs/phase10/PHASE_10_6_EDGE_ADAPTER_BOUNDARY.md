@@ -1,0 +1,7 @@
+# Phase 10.6 — Edge command adapter boundary
+
+The repository's verified MQTT command contract is the existing manual operator flow only: `greenhouse/{greenhouseId}/{deviceId}/command` with `{ commandId, command: 'ON'|'OFF', actuator }`, followed by a device `response` containing command identity and execution state. `ControlCommandsService` records PENDING/SENT and then ACKNOWLEDGED/EXECUTED/FAILED/TIMEOUT feedback. This contract has no rule-set version, decision key, automatic-command idempotency, manual-stop/interlock state, or edge configuration acknowledgment. It must not be reused as automatic rule execution without a reviewed firmware and broker contract.
+
+Phase 10.5 therefore defines an `ActuatorCommandAdapter` status interface (`NOT_SENT`, `SENT`, `ACKNOWLEDGED`, `TIMEOUT`, `FAILED`) and a disabled implementation that always returns `NOT_SENT`. It never publishes to MQTT. The existing manual command service remains separate and unchanged.
+
+Before enabling an automatic adapter, define and verify: device-side command deduplication and expiry; target allow-list and zone binding; command/decision/rule-set correlation; signed or authenticated publisher identity and EMQX ACL; manual emergency stop and hardware interlocks; safe behavior on offline/reconnect/retry; exact acknowledgment, rejection and timeout payloads; and firmware compatibility tests on isolated devices. Loss of communication must not trigger automatic resend. Until those checks exist, evaluation remains dry-run and blocked when the stop/interlock state is unknown.

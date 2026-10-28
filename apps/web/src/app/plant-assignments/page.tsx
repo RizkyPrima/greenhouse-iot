@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { AlertTriangle, Check, ChevronDown, Layers, Plus, RefreshCw, ShieldCheck, Warehouse } from 'lucide-react';
@@ -104,6 +104,8 @@ export default function PlantAssignmentsPage() {
   const [overrideValues, setOverrideValues] = useState<Record<string, string>>({});
   const [overrideEnabled, setOverrideEnabled] = useState<Record<string, boolean>>({});
   const [overrideNulls, setOverrideNulls] = useState<Record<string, boolean>>({});
+  const activationAttempt = useRef<{ signature: string; key: string } | null>(null);
+  const deactivationKeys = useRef<Record<string, string>>({});
 
   const greenhousesQuery = useQuery({
     queryKey: ['greenhouses', organizationId],
@@ -192,13 +194,23 @@ export default function PlantAssignmentsPage() {
     ]);
   };
   const activate = useMutation({
-    mutationFn: () => apiClient.activatePlantProfileInZone(zoneId, { organizationId: organizationId!, plantProfileVersionId: versionId, growthStageId: stageId }),
-    onSuccess: async (assignment) => { setActionError(''); setViewAssignmentId(assignment.id); await invalidateZone(); },
+    mutationFn: (request: { zoneId: string; organizationId: string; plantProfileVersionId: string; growthStageId: string; idempotencyKey: string }) => apiClient.activatePlantProfileInZone(request.zoneId, {
+      organizationId: request.organizationId,
+      plantProfileVersionId: request.plantProfileVersionId,
+      growthStageId: request.growthStageId,
+    }, request.idempotencyKey),
+    onSuccess: async (assignment, request) => {
+      if (activationAttempt.current?.key === request.idempotencyKey) activationAttempt.current = null;
+      setActionError(''); setViewAssignmentId(assignment.id); await invalidateZone();
+    },
     onError: (error) => setActionError(apiError(error).message),
   });
   const deactivate = useMutation({
-    mutationFn: (assignmentId: string) => apiClient.deactivateZonePlantAssignment(organizationId!, assignmentId),
-    onSuccess: async () => { setActionError(''); await invalidateZone(); },
+    mutationFn: (request: { assignmentId: string; organizationId: string; idempotencyKey: string }) => apiClient.deactivateZonePlantAssignment(request.organizationId, request.assignmentId, request.idempotencyKey),
+    onSuccess: async (_assignment, request) => {
+      if (deactivationKeys.current[request.assignmentId] === request.idempotencyKey) delete deactivationKeys.current[request.assignmentId];
+      setActionError(''); await invalidateZone();
+    },
     onError: (error) => setActionError(apiError(error).message),
   });
   const createOverride = useMutation({
@@ -223,7 +235,13 @@ export default function PlantAssignmentsPage() {
     const message = activeAssignment
       ? 'Aktifkan konfigurasi ini? Assignment aktif sebelumnya akan diakhiri oleh backend dalam transaksi yang sama.'
       : 'Aktifkan profil dan growth stage ini pada zona terpilih?';
-    if (window.confirm(message)) activate.mutate();
+    if (!window.confirm(message)) return;
+    const request = { zoneId, organizationId, plantProfileVersionId: versionId, growthStageId: stageId };
+    const signature = JSON.stringify(request);
+    if (!activationAttempt.current || activationAttempt.current.signature !== signature) {
+      activationAttempt.current = { signature, key: crypto.randomUUID() };
+    }
+    activate.mutate({ ...request, idempotencyKey: activationAttempt.current.key });
   }
 
   function submitOverride(event: FormEvent<HTMLFormElement>) {
@@ -268,7 +286,7 @@ export default function PlantAssignmentsPage() {
           {zoneId && <>
             <section className="space-y-4">
               <div className="flex items-end justify-between"><div><h2 className="text-lg font-semibold text-white">Assignment zona</h2><p className="mt-1 text-sm text-slate-400">Riwayat assignment dan statusnya, dibatasi ke zona terpilih.</p></div><button onClick={() => void assignmentsQuery.refetch()} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:bg-slate-800"><RefreshCw className="h-3.5 w-3.5" /> Muat ulang</button></div>
-              {assignmentsQuery.isLoading ? <div className="h-24 animate-pulse rounded-2xl bg-slate-900" /> : assignmentsQuery.isError ? <div role="alert" className="rounded-xl border border-rose-500/25 bg-rose-500/10 p-4 text-sm text-rose-200">Assignment zona gagal dimuat: {apiError(assignmentsQuery.error).message}</div> : activeAssignments.length > 1 ? <div role="alert" className="flex gap-3 rounded-xl border border-rose-500/25 bg-rose-500/10 p-4 text-sm text-rose-200"><AlertTriangle className="h-5 w-5 shrink-0" />Terdapat lebih dari satu assignment ACTIVE. UI menonaktifkan aktivasi sampai konsistensi diperiksa.</div> : (assignmentsQuery.data?.length ?? 0) === 0 ? <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-sm text-slate-400">Belum ada assignment untuk zona ini.</div> : <div className="space-y-3">{assignmentsQuery.data?.map((assignment) => <AssignmentCard key={assignment.id} assignment={assignment} selected={shownAssignment?.id === assignment.id} canManage={canManage} onSelect={() => setViewAssignmentId(assignment.id)} onDeactivate={() => { if (window.confirm('Akhiri assignment aktif ini? Riwayat assignment tetap dipertahankan.')) deactivate.mutate(assignment.id); }} deactivating={deactivate.isPending && deactivate.variables === assignment.id} />)}</div>}
+              {assignmentsQuery.isLoading ? <div className="h-24 animate-pulse rounded-2xl bg-slate-900" /> : assignmentsQuery.isError ? <div role="alert" className="rounded-xl border border-rose-500/25 bg-rose-500/10 p-4 text-sm text-rose-200">Assignment zona gagal dimuat: {apiError(assignmentsQuery.error).message}</div> : activeAssignments.length > 1 ? <div role="alert" className="flex gap-3 rounded-xl border border-rose-500/25 bg-rose-500/10 p-4 text-sm text-rose-200"><AlertTriangle className="h-5 w-5 shrink-0" />Terdapat lebih dari satu assignment ACTIVE. UI menonaktifkan aktivasi sampai konsistensi diperiksa.</div> : (assignmentsQuery.data?.length ?? 0) === 0 ? <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-sm text-slate-400">Belum ada assignment untuk zona ini.</div> : <div className="space-y-3">{assignmentsQuery.data?.map((assignment) => <AssignmentCard key={assignment.id} assignment={assignment} selected={shownAssignment?.id === assignment.id} canManage={canManage} onSelect={() => setViewAssignmentId(assignment.id)} onDeactivate={() => { if (!organizationId || !window.confirm('Akhiri assignment aktif ini? Riwayat assignment tetap dipertahankan.')) return; const key = deactivationKeys.current[assignment.id] ?? (deactivationKeys.current[assignment.id] = crypto.randomUUID()); deactivate.mutate({ assignmentId: assignment.id, organizationId, idempotencyKey: key }); }} deactivating={deactivate.isPending && deactivate.variables?.assignmentId === assignment.id} />)}</div>}
               {actionError && <p role="alert" className="rounded-xl border border-rose-500/25 bg-rose-500/10 p-4 text-sm text-rose-200">{actionError}</p>}
             </section>
 

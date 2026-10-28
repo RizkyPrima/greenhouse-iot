@@ -15,7 +15,7 @@ export class ResearchGrantsController {
 
   @Post()
   create(@Body() dto: CreateResearchSourceGrantDto, @CurrentUser() actor: AuthenticatedUser) {
-    return this.grants.create(dto.userId, actor);
+    return this.grants.create(dto.userId, actor, dto.permission);
   }
 
   @Patch(':grantId/revoke')

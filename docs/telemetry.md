@@ -4,6 +4,8 @@
 
 The telemetry pipeline uses a fast realtime path via Redis and an asynchronous persistence path via PostgreSQL to minimize latency.
 
+Approved Phase 10.5 rule sets are evaluated asynchronously from this telemetry stream in dry-run mode. See [the Rule Engine/Decision Manager contract](phase10/PHASE_10_5_RULE_DECISION_MANAGER.md); it adds no MQTT topic or automatic actuator publish.
+
 ```mermaid
 graph TD
     ESP32 -->|MQTT| EMQX
@@ -78,3 +80,30 @@ Two main models:
 
 ## 8. Benchmark Profile
 The architecture splits realtime (fast path) and history (async path) making the node process capable of easily handling 100+ msg/sec without blocking the event loop or generating realtime response latency.
+
+## 9. Monitoring-only plant configuration
+
+The Plant Setup page can apply a published catalog's selected sensor parameters to a compatible
+ESP32-S3. This is a separate protocol from actuator commands:
+
+- API publishes to `greenhouse/{greenhouseCode}/{deviceId}/config` at QoS 1, without retain.
+- Firmware only subscribes to `/config`; the existing ON/OFF handler remains subscribed only to
+  `/command`.
+- A monitoring payload uses `schema: "plant-monitoring/v1"`, `mode: "monitoring_only"`, a unique
+  `configurationId`, increasing per-device `version`, the published `catalogVersionId`, parameter
+  keys, and an allowlisted sensor-code list. It contains no actuator fields.
+- Firmware validates the schema and sensor mapping, stores the selection in NVS, then sends
+  `RECEIVED` and `APPLIED` acknowledgements on `/response` with `type: "plant_config"`.
+- API state distinguishes `PUBLISHING`, `SENT`, `RECEIVED`, `APPLIED`, `REJECTED`, `TIMEOUT`, and
+  `FAILED`. A successful broker publish is not an applied-device acknowledgement.
+
+The current firmware exposes `temperature`, `humidity`, `soil_moisture`, and `light_intensity`.
+The backend only maps catalog keys `air_temperature`, `relative_humidity`, `soil_moisture`, and
+`light_intensity`. Other catalog parameters (including pH, TDS, and water temperature) are rejected
+until firmware and registered sensor support exist. The current firmware reports
+`sensorDataMode: "SIMULATED"`; this is not evidence that physical sensors are installed or calibrated.
+
+Applying this feature requires the additive migration
+`apps/api/prisma/migrations/20261028170000_phase10_7_monitoring_config_delivery/migration.sql`.
+It is intentionally not applied automatically; deployment operators must verify the target
+database and run the project's approved migration process before using the delivery endpoints.

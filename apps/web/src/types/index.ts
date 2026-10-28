@@ -101,6 +101,59 @@ export interface Device {
   actuators?: Actuator[];
 }
 
+export interface PlantConfigurationDevice {
+  id: string;
+  deviceId: string;
+  name: string;
+  greenhouse: { code: string; name: string };
+  status: DeviceStatus;
+  lastSeenAt: string | null;
+  firmwareVersion: string | null;
+  sensors: Array<{ code: string; name: string; unit: string | null }>;
+  lastConfiguration: {
+    configurationId: string;
+    version: number;
+    status: DevicePlantConfigurationStatus;
+    createdAt: string;
+    error: string | null;
+  } | null;
+  capability: {
+    schema: string | null;
+    sensorCodes: string[];
+    supportedParameterKeys: string[];
+    sensorDataMode: 'PHYSICAL' | 'SIMULATED' | null;
+    reportedAt: string | null;
+  };
+}
+
+export type DevicePlantConfigurationStatus =
+  | 'PENDING'
+  | 'PUBLISHING'
+  | 'SENT'
+  | 'RECEIVED'
+  | 'APPLIED'
+  | 'REJECTED'
+  | 'TIMEOUT'
+  | 'FAILED';
+
+export interface DevicePlantConfigurationDelivery {
+  id: string;
+  configurationId: string;
+  organizationId: string;
+  deviceId: string;
+  deviceMqttId: string;
+  catalogVersionId: string;
+  version: number;
+  status: DevicePlantConfigurationStatus;
+  payload: PlantJsonObject;
+  error: string | null;
+  createdAt: string;
+  sentAt: string | null;
+  receivedAt: string | null;
+  appliedAt: string | null;
+  completedAt: string | null;
+}
+
 export interface Sensor {
   id: string;
   deviceId: string;
@@ -171,6 +224,52 @@ export type PlantJsonValue = string | number | boolean | null | PlantJsonValue[]
 export type PlantJsonObject = Record<string, PlantJsonValue>;
 export type PlantCatalogStatus = 'ACTIVE' | 'INACTIVE';
 export type PlantCatalogVersionStatus = 'DRAFT' | 'PUBLISHED' | 'RETIRED';
+export type PlantAiProposalStatus = 'REQUESTED' | 'RESEARCH_PENDING' | 'PROPOSED' | 'NEEDS_REVIEW' | 'INVALID' | 'APPROVED' | 'REJECTED';
+export interface PlantAiProposalRecord {
+  id: string;
+  organizationId: string;
+  plantCatalogId: string;
+  targetCatalogVersionId: string | null;
+  status: PlantAiProposalStatus;
+  createdByUserId: string;
+  contract: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  evidenceLinks: Array<{ evidence: { id: string; verificationStatus: string; contract: Record<string, unknown> } }>;
+}
+
+export interface PlantRecommendationResult {
+  status: 'PROVIDER_NOT_CONFIGURED' | 'INSUFFICIENT_EVIDENCE' | 'PROPOSAL_CREATED';
+  proposal: PlantAiProposalRecord | null;
+  evidence: Array<{ evidenceId: string; parameterKey?: string; reportedValue?: unknown; unit?: string; findingSummary?: string; source?: { title?: string; doi?: string; canonicalUrl?: string; publicationYear?: number } }>;
+  completeness: { verifiedEvidenceCount: number; parametersWithEvidence: number; totalParameters: number; missingParameters: string[] };
+  findings: Array<{ code: string; field: string; explanation: string }>;
+}
+export interface PlantScientificEvidenceRecord {
+  id: string;
+  organizationId: string | null;
+  sourceId: string | null;
+  verificationStatus: 'UNKNOWN' | 'UNVERIFIED' | 'VERIFIED';
+  contract: Record<string, unknown>;
+  verifiedByUserId: string | null;
+  verifiedAt: string | null;
+  createdAt: string;
+}
+export interface GeneratePlantSetupDto {
+  commonName: string;
+  scientificName?: string;
+  cultivar?: string;
+  cultivationMethod: 'hydroponic_tower' | 'hydroponic_nft' | 'hydroponic_dwc' | 'soil' | 'other';
+  growthStageContext?: string;
+}
+export interface PlantSetupCandidateResult {
+  status: 'CANDIDATES_FOR_REVIEW';
+  scientificNameSuggestion: string | null;
+  parameters: Array<{ parameterKey: string; label: string; dataType: 'number'; unit: null; evidenceStatus: 'NOT_ASSESSED' }>;
+  growthStages: Array<{ code: string; label: string; sequence: number }>;
+  provider: { name: string; model?: string };
+  findings: Array<{ code: string; explanation: string }>;
+}
 export type PlantProfileStatus = 'ACTIVE' | 'ARCHIVED';
 export type PlantProfileVersionStatus = 'DRAFT' | 'VALIDATED' | 'RETIRED';
 export type ZonePlantAssignmentStatus = 'ACTIVE' | 'ENDED' | 'CANCELLED';
@@ -187,12 +286,14 @@ export interface CreatePlantCatalogVersionDto {
   profileDefaults: PlantJsonObject;
   stageTemplates?: PlantJsonValue[];
   edgeCompatibility?: PlantJsonObject;
+  changeOrigin?: 'AI_PLANT_SETUP' | 'MANUAL_EDIT';
 }
 
 export interface UpdatePlantCatalogVersionDto {
   profileDefaults?: PlantJsonObject;
   stageTemplates?: PlantJsonValue[];
   edgeCompatibility?: PlantJsonObject;
+  changeOrigin?: 'AI_PLANT_SETUP' | 'MANUAL_EDIT';
 }
 
 export interface CreatePlantParameterDefinitionDto {
@@ -202,6 +303,7 @@ export interface CreatePlantParameterDefinitionDto {
   unit?: string;
   valueSchema: PlantJsonObject;
   metadataSchema?: PlantJsonObject;
+  changeOrigin?: 'AI_PLANT_SETUP' | 'MANUAL_EDIT';
 }
 
 export interface UpdatePlantParameterDefinitionDto {
@@ -211,6 +313,7 @@ export interface UpdatePlantParameterDefinitionDto {
   unit?: string | null;
   valueSchema?: PlantJsonObject;
   metadataSchema?: PlantJsonObject;
+  changeOrigin?: 'AI_PLANT_SETUP' | 'MANUAL_EDIT';
 }
 
 export interface CreateGrowthStageDto {
@@ -223,7 +326,12 @@ export interface CreateGrowthStageDto {
   config?: PlantJsonObject;
 }
 
+export interface CreateDraftGrowthStageDto extends CreateGrowthStageDto {
+  expectedRevision: number;
+}
+
 export interface UpdateGrowthStageDto {
+  expectedRevision: number;
   code?: string;
   label?: string;
   sequence?: number;
@@ -242,6 +350,7 @@ export interface CreatePlantProfileDto {
 }
 
 export interface UpdatePlantProfileDraftDto {
+  expectedRevision: number;
   name?: string;
   profileConfig?: PlantJsonObject;
 }
@@ -337,6 +446,7 @@ export interface PlantProfileVersion {
   sourceCatalogVersionId: string;
   adoptedFromVersionId: string | null;
   status: PlantProfileVersionStatus;
+  draftRevision: number;
   configSchemaVersion: string;
   profileConfig: PlantJsonObject;
   checksumAlgorithm: string;

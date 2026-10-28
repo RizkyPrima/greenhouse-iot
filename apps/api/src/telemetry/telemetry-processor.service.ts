@@ -8,6 +8,8 @@ import { TelemetryPersistenceService } from './telemetry-persistence.service.js'
 import { TelemetryGateway } from './telemetry.gateway.js';
 import { Optional } from '@nestjs/common';
 import { ControlCommandsService } from '../actuators/control-commands.service.js';
+import { DecisionManagerService } from '../decision-manager/decision-manager.service.js';
+import { DevicePlantConfigurationService } from '../plants/device-plant-configuration.service.js';
 
 @Injectable()
 export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy {
@@ -21,6 +23,8 @@ export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy 
     private readonly persistence: TelemetryPersistenceService,
     @Optional() private readonly gateway?: TelemetryGateway,
     @Optional() private readonly commands?: ControlCommandsService,
+    @Optional() private readonly decisionManager?: DecisionManagerService,
+    @Optional() private readonly deviceConfigurations?: DevicePlantConfigurationService,
   ) {}
 
   onModuleInit(): void {
@@ -66,6 +70,10 @@ export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy 
         this.logger.warn(`[TELEMETRY_ALARM] greenhouse=${greenhouseId} device=${deviceMqttId}`);
         break;
       case 'response': {
+        if (payload && typeof payload === 'object' && (payload as Record<string, unknown>).type === 'plant_config') {
+          await this.deviceConfigurations?.handleAcknowledgement(greenhouseId, deviceMqttId, payload);
+          break;
+        }
         const update = await this.commands?.handleResponse(deviceMqttId, payload);
         if (update) this.gateway?.broadcastCommandUpdate(update);
         break;
@@ -143,6 +151,16 @@ export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy 
     }
 
     // ── 2. PERSISTENCE PATH (PostgreSQL) ────────────────────────────────────
+    if (!isOutOfOrder && this.decisionManager) {
+      void this.realtime.getDeviceState(deviceMqttId).then((state) => {
+        if (!state || state.greenhouseId !== greenhouseId || (validated.seq !== undefined && state.sequence !== validated.seq)) return null;
+        return this.decisionManager!.evaluateTelemetry(greenhouseId, deviceMqttId, validated, state);
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.error(`[DECISION_EVALUATION_ERROR] device=${deviceMqttId}: ${msg}`);
+      });
+    }
+
     // Fire-and-forget — never blocks realtime path
     this.persistTelemetryAsync(greenhouseId, deviceMqttId, validated, rawPayload);
   }

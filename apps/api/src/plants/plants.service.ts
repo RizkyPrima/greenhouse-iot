@@ -1,18 +1,21 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import {
   PlatformPermission,
   PlantProfileVersionStatus,
   PlantVersionStatus,
+  ZoneActivationOperation,
   UserRole,
   ZonePlantAssignmentStatus,
 } from '@prisma/client';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { AuthorizationService } from '../auth/authorization.service.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -22,12 +25,14 @@ import {
   configChecksum,
   mergePlantConfig,
   PLANT_CONFIG_SCHEMA_VERSION,
+  validateCatalogConfiguration,
   validatePlantLayer,
 } from './plant-config.js';
 import type {
   AdoptPlantCatalogVersionDto,
   ActivatePlantProfileDto,
   CreateCatalogVersionDto,
+  CreateDraftGrowthStageDto,
   CreateGrowthStageDto,
   CreateParameterDefinitionDto,
   CreatePlantCatalogDto,
@@ -51,6 +56,43 @@ function catalogVersionUsesParameter(version: { profileDefaults: unknown; stageT
   return version.stageTemplates.some((template) => isRecord(template)
     && isRecord(template.config)
     && Object.hasOwn(template.config, key));
+}
+
+function requireIdempotencyKey(value: unknown): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new BadRequestException({ code: 'IDEMPOTENCY_KEY_REQUIRED', message: 'Idempotency-Key header is required' });
+  }
+  const key = value.trim();
+  if (key.length > 200) {
+    throw new BadRequestException({ code: 'IDEMPOTENCY_KEY_TOO_LONG', message: 'Idempotency-Key must not exceed 200 characters' });
+  }
+  return key;
+}
+
+function isRetryableTransactionConflict(error: unknown): boolean {
+  const value = error as { code?: unknown; meta?: { code?: unknown }; cause?: unknown };
+  return value?.code === 'P2034'
+    || value?.meta?.code === '40P01'
+    || value?.meta?.code === '40001'
+    || (value?.cause !== undefined && isRetryableTransactionConflict(value.cause));
+}
+
+function isIdempotencyUniqueConflict(error: unknown): boolean {
+  const value = error as { code?: unknown; meta?: { target?: unknown } };
+  if (value?.code !== 'P2002') return false;
+  const target = value.meta?.target;
+  const description = Array.isArray(target) ? target.join(',') : String(target ?? '');
+  return description.includes('organizationId') && description.includes('operation') && description.includes('idempotencyKey');
+}
+
+function growthStageUniqueConflict(error: unknown): 'code' | 'sequence' | null {
+  const value = error as { code?: unknown; meta?: { target?: unknown } };
+  if (value?.code !== 'P2002') return null;
+  const target = value.meta?.target;
+  const description = (Array.isArray(target) ? target.join(',') : String(target ?? '')).toLocaleLowerCase();
+  if (description.includes('code')) return 'code';
+  if (description.includes('sequence')) return 'sequence';
+  return null;
 }
 
 @Injectable()
@@ -126,7 +168,10 @@ export class PlantsService {
         },
       });
       await tx.plantConfigAuditEvent.create({
-        data: { actorUserId: actor.id, organizationId, action: 'CATALOG_VERSION_DRAFTED', entityType: 'PlantCatalogVersion', entityId: version.id },
+        data: {
+          actorUserId: actor.id, organizationId, action: 'CATALOG_VERSION_DRAFTED', entityType: 'PlantCatalogVersion', entityId: version.id,
+          details: dto.changeOrigin ? { changeOrigin: dto.changeOrigin } : undefined,
+        },
       });
       return version;
     });
@@ -146,7 +191,12 @@ export class PlantsService {
           ...(dto.edgeCompatibility !== undefined ? { edgeCompatibility: dto.edgeCompatibility as Prisma.InputJsonValue } : {}),
         },
       });
-      await tx.plantConfigAuditEvent.create({ data: { actorUserId: actor.id, organizationId, action: 'CATALOG_VERSION_EDITED', entityType: 'PlantCatalogVersion', entityId: versionId } });
+      await tx.plantConfigAuditEvent.create({
+        data: {
+          actorUserId: actor.id, organizationId, action: 'CATALOG_VERSION_EDITED', entityType: 'PlantCatalogVersion', entityId: versionId,
+          details: dto.changeOrigin ? { changeOrigin: dto.changeOrigin } : undefined,
+        },
+      });
       return result;
     });
     return updated;
@@ -173,7 +223,10 @@ export class PlantsService {
         },
       });
       await tx.plantConfigAuditEvent.create({
-        data: { actorUserId: actor.id, organizationId, action: 'PARAMETER_DEFINED', entityType: 'PlantParameterDefinition', entityId: definition.id },
+        data: {
+          actorUserId: actor.id, organizationId, action: 'PARAMETER_DEFINED', entityType: 'PlantParameterDefinition', entityId: definition.id,
+          details: dto.changeOrigin ? { changeOrigin: dto.changeOrigin } : undefined,
+        },
       });
       return definition;
     });
@@ -208,7 +261,10 @@ export class PlantsService {
 
       const updated = await tx.plantParameterDefinition.update({ where: { id: parameterId }, data: normalized });
       await tx.plantConfigAuditEvent.create({
-        data: { actorUserId: actor.id, organizationId, action: 'PARAMETER_DEFINITION_EDITED', entityType: 'PlantParameterDefinition', entityId: parameterId },
+        data: {
+          actorUserId: actor.id, organizationId, action: 'PARAMETER_DEFINITION_EDITED', entityType: 'PlantParameterDefinition', entityId: parameterId,
+          details: dto.changeOrigin ? { changeOrigin: dto.changeOrigin } : undefined,
+        },
       });
       return updated;
     });
@@ -248,21 +304,8 @@ export class PlantsService {
     });
     if (!version) throw new NotFoundException('Plant catalog version not found');
     if (version.status !== PlantVersionStatus.DRAFT) throw new ConflictException('Only draft catalog versions can be published');
-    const schema = buildParameterObjectSchema(version.parameterDefinitions);
-    const partialSchema = buildParameterObjectSchema(version.parameterDefinitions, { partial: true });
     try {
-      validatePlantLayer(version.profileDefaults as Record<string, unknown>, partialSchema);
-      const templates = version.stageTemplates as unknown[];
-      if (!templates.length) validatePlantLayer(version.profileDefaults as Record<string, unknown>, schema);
-      for (const [index, template] of templates.entries()) {
-        if (!template || typeof template !== 'object' || Array.isArray(template)) {
-          throw new Error(`Stage template ${index + 1} must be an object`);
-        }
-        const config = (template as { config?: unknown }).config ?? EMPTY_CONFIG;
-        if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Stage template config must be an object');
-        validatePlantLayer(config as Record<string, unknown>, partialSchema);
-        validatePlantLayer(mergePlantConfig(version.profileDefaults as Record<string, unknown>, config as Record<string, unknown>), schema);
-      }
+      validateCatalogConfiguration(version, version.parameterDefinitions);
     } catch (error) {
       throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Catalog configuration is invalid');
     }
@@ -308,16 +351,36 @@ export class PlantsService {
   }
 
   async revokePlatformGrant(grantId: string, actor: AuthenticatedUser) {
-    const grant = await this.prisma.platformAdminGrant.findUnique({ where: { id: grantId } });
-    if (!grant) throw new NotFoundException('Platform grant not found');
-    if (grant.revokedAt) return grant;
     return this.prisma.$transaction(async (tx) => {
-      const revoked = await tx.platformAdminGrant.update({ where: { id: grantId }, data: { revokedAt: new Date() } });
+      const grant = await tx.platformAdminGrant.findUnique({ where: { id: grantId } });
+      if (!grant || grant.permission !== PlatformPermission.PLANT_CATALOG_ADMIN) {
+        throw new NotFoundException('Platform grant not found');
+      }
+      if (grant.revokedAt) return grant;
+      const revoked = await tx.platformAdminGrant.update({
+        where: { id: grantId, permission: PlatformPermission.PLANT_CATALOG_ADMIN, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
       await tx.plantConfigAuditEvent.create({
         data: { actorUserId: actor.id, action: 'PLATFORM_GRANT_REVOKED', entityType: 'PlatformAdminGrant', entityId: grantId, details: { userId: grant.userId } },
       });
       return revoked;
     });
+  }
+
+  async listPlatformGrants() {
+    const grants = await this.prisma.platformAdminGrant.findMany({
+      where: { permission: PlatformPermission.PLANT_CATALOG_ADMIN },
+      select: {
+        id: true,
+        userId: true,
+        grantedAt: true,
+        revokedAt: true,
+        user: { select: { id: true, email: true, name: true } },
+      },
+      orderBy: { grantedAt: 'desc' },
+    });
+    return grants.map((grant) => ({ ...grant, status: grant.revokedAt ? 'REVOKED' : 'ACTIVE' }));
   }
 
   async listProfiles(organizationId: string, actor: AuthenticatedUser) {
@@ -344,20 +407,35 @@ export class PlantsService {
 
   async createProfileVersion(organizationId: string, profileId: string, actor: AuthenticatedUser) {
     await this.requireOrganization(actor.id, organizationId, true);
-    const profile = await this.prisma.plantProfile.findFirst({
-      where: { id: profileId, organizationId, status: 'ACTIVE' },
-      include: { versions: { orderBy: { version: 'desc' }, take: 1, include: { growthStages: { orderBy: { sequence: 'asc' }, include: { parameterConfig: true } } } } },
-    });
-    if (!profile) throw new NotFoundException('Plant profile not found');
-    const prior = profile.versions[0];
-    if (!prior || prior.status === PlantProfileVersionStatus.DRAFT) throw new ConflictException('A draft version already exists or no validated version is available');
-    if (prior.status !== PlantProfileVersionStatus.VALIDATED) throw new ConflictException('Only a validated profile version can be used as a draft base');
     return this.prisma.$transaction(async (tx) => {
+      const lockedProfiles = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id"
+        FROM "plant_profiles"
+        WHERE "id" = ${profileId}
+          AND "organizationId" = ${organizationId}
+          AND "status" = 'ACTIVE'
+        FOR UPDATE
+      `;
+      if (lockedProfiles.length === 0) throw new NotFoundException('Plant profile not found');
+
+      const profile = await tx.plantProfile.findFirst({
+        where: { id: profileId, organizationId, status: 'ACTIVE' },
+        include: { versions: { orderBy: { version: 'desc' }, take: 1, include: { growthStages: { orderBy: { sequence: 'asc' }, include: { parameterConfig: true } } } } },
+      });
+      if (!profile) throw new NotFoundException('Plant profile not found');
+      const prior = profile.versions[0];
+      if (!prior || prior.status === PlantProfileVersionStatus.DRAFT) {
+        throw new ConflictException({ code: 'PROFILE_DRAFT_ALREADY_EXISTS', message: 'A draft version already exists or no validated version is available' });
+      }
+      if (prior.status !== PlantProfileVersionStatus.VALIDATED) {
+        throw new ConflictException({ code: 'PROFILE_VERSION_NOT_VALID_BASE', message: 'Only a validated profile version can be used as a draft base' });
+      }
       const version = await tx.plantProfileVersion.create({
         data: {
           plantProfileId: profileId, organizationId, plantCatalogId: profile.plantCatalogId,
           version: prior.version + 1, sourceCatalogVersionId: prior.sourceCatalogVersionId,
           adoptedFromVersionId: prior.id, status: PlantProfileVersionStatus.DRAFT,
+          draftRevision: 1,
           configSchemaVersion: prior.configSchemaVersion, profileConfig: prior.profileConfig as Prisma.InputJsonValue,
           createdByUserId: actor.id,
           growthStages: { create: prior.growthStages.map((stage) => ({
@@ -371,64 +449,87 @@ export class PlantsService {
       });
       await tx.plantConfigAuditEvent.create({ data: { actorUserId: actor.id, organizationId, action: 'PLANT_PROFILE_VERSION_DRAFTED', entityType: 'PlantProfileVersion', entityId: version.id, fromChecksum: prior.checksum } });
       return version;
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   }
 
   async updateProfileDraft(organizationId: string, versionId: string, dto: UpdateProfileDraftDto, actor: AuthenticatedUser) {
     await this.requireOrganization(actor.id, organizationId, true);
-    const version = await this.prisma.plantProfileVersion.findFirst({ where: { id: versionId, organizationId } });
-    if (!version) throw new NotFoundException('Plant profile version not found');
-    if (version.status !== PlantProfileVersionStatus.DRAFT) throw new ConflictException('Only draft profile versions can be edited');
     return this.prisma.$transaction(async (tx) => {
+      const nextRevision = await this.claimDraftRevision(tx, organizationId, versionId, dto.expectedRevision);
+      const version = await tx.plantProfileVersion.findFirst({ where: { id: versionId, organizationId, status: PlantProfileVersionStatus.DRAFT } });
+      if (!version) throw new NotFoundException('Plant profile version not found');
       if (dto.name !== undefined) await tx.plantProfile.update({ where: { id: version.plantProfileId }, data: { name: dto.name.trim() } });
       const updated = await tx.plantProfileVersion.update({
-        where: { id: versionId },
+        where: { id: versionId, organizationId, status: PlantProfileVersionStatus.DRAFT, draftRevision: nextRevision },
         data: dto.profileConfig !== undefined ? { profileConfig: dto.profileConfig as Prisma.InputJsonValue } : {},
       });
-      await tx.plantConfigAuditEvent.create({ data: { actorUserId: actor.id, organizationId, action: 'PLANT_PROFILE_DRAFT_EDITED', entityType: 'PlantProfileVersion', entityId: versionId } });
+      await tx.plantConfigAuditEvent.create({ data: { actorUserId: actor.id, organizationId, action: 'PLANT_PROFILE_DRAFT_EDITED', entityType: 'PlantProfileVersion', entityId: versionId, details: { draftRevision: nextRevision } } });
       return updated;
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   }
 
-  async createGrowthStage(organizationId: string, versionId: string, dto: CreateGrowthStageDto, actor: AuthenticatedUser) {
+  async createGrowthStage(organizationId: string, versionId: string, dto: CreateDraftGrowthStageDto, actor: AuthenticatedUser) {
     await this.requireOrganization(actor.id, organizationId, true);
-    const version = await this.prisma.plantProfileVersion.findFirst({
-      where: { id: versionId, organizationId },
-      include: { sourceCatalogVersion: { include: { parameterDefinitions: true } } },
-    });
-    if (!version) throw new NotFoundException('Plant profile version not found');
-    if (version.status !== PlantProfileVersionStatus.DRAFT) throw new ConflictException('Stages can only be added to draft profile versions');
-    try {
-      validatePlantLayer(dto.config ?? EMPTY_CONFIG, buildParameterObjectSchema(version.sourceCatalogVersion.parameterDefinitions, { partial: true }));
-    } catch (error) {
-      throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Stage configuration is invalid');
-    }
     return this.prisma.$transaction(async (tx) => {
-      const stage = await tx.growthStage.create({
-        data: { plantProfileVersionId: versionId, ...this.stageCreateInput(dto, version.configSchemaVersion) },
-        include: { parameterConfig: true },
+      const nextRevision = await this.claimDraftRevision(tx, organizationId, versionId, dto.expectedRevision);
+      const version = await tx.plantProfileVersion.findFirst({
+        where: { id: versionId, organizationId, status: PlantProfileVersionStatus.DRAFT },
+        include: { sourceCatalogVersion: { include: { parameterDefinitions: true } } },
       });
-      await tx.plantConfigAuditEvent.create({ data: { actorUserId: actor.id, organizationId, action: 'GROWTH_STAGE_CREATED', entityType: 'GrowthStage', entityId: stage.id } });
+      if (!version) throw new NotFoundException('Plant profile version not found');
+      try {
+        validatePlantLayer(dto.config ?? EMPTY_CONFIG, buildParameterObjectSchema(version.sourceCatalogVersion.parameterDefinitions, { partial: true }));
+      } catch (error) {
+        throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Stage configuration is invalid');
+      }
+      let stage;
+      try {
+        stage = await tx.growthStage.create({
+          data: { plantProfileVersionId: versionId, ...this.stageCreateInput(dto, version.configSchemaVersion) },
+          include: { parameterConfig: true },
+        });
+      } catch (error) {
+        const duplicate = growthStageUniqueConflict(error);
+        if (duplicate === 'code') {
+          throw new ConflictException({
+            code: 'GROWTH_STAGE_CODE_EXISTS',
+            message: 'A growth stage with this code already exists in this profile version',
+          });
+        }
+        if (duplicate === 'sequence') {
+          throw new ConflictException({
+            code: 'GROWTH_STAGE_SEQUENCE_EXISTS',
+            message: 'A growth stage with this sequence already exists in this profile version',
+          });
+        }
+        throw error;
+      }
+      await tx.plantConfigAuditEvent.create({ data: { actorUserId: actor.id, organizationId, action: 'GROWTH_STAGE_CREATED', entityType: 'GrowthStage', entityId: stage.id, details: { draftRevision: nextRevision } } });
       return stage;
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   }
 
   async updateGrowthStage(organizationId: string, stageId: string, dto: UpdateGrowthStageDto, actor: AuthenticatedUser) {
     await this.requireOrganization(actor.id, organizationId, true);
-    const stage = await this.prisma.growthStage.findFirst({
-      where: { id: stageId, plantProfileVersion: { organizationId } },
-      include: { plantProfileVersion: { include: { sourceCatalogVersion: { include: { parameterDefinitions: true } } } }, parameterConfig: true },
-    });
-    if (!stage) throw new NotFoundException('Growth stage not found');
-    if (stage.plantProfileVersion.status !== PlantProfileVersionStatus.DRAFT) throw new ConflictException('Only stages in draft profile versions can be edited');
-    if (dto.config !== undefined) {
-      try {
-        validatePlantLayer(dto.config, buildParameterObjectSchema(stage.plantProfileVersion.sourceCatalogVersion.parameterDefinitions, { partial: true }));
-      } catch (error) {
-        throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Stage configuration is invalid');
-      }
-    }
     return this.prisma.$transaction(async (tx) => {
+      const stageIdentity = await tx.growthStage.findFirst({
+        where: { id: stageId, plantProfileVersion: { organizationId } },
+        select: { plantProfileVersionId: true },
+      });
+      if (!stageIdentity) throw new NotFoundException('Growth stage not found');
+      const nextRevision = await this.claimDraftRevision(tx, organizationId, stageIdentity.plantProfileVersionId, dto.expectedRevision);
+      const stage = await tx.growthStage.findFirst({
+        where: { id: stageId, plantProfileVersionId: stageIdentity.plantProfileVersionId },
+        include: { plantProfileVersion: { include: { sourceCatalogVersion: { include: { parameterDefinitions: true } } } }, parameterConfig: true },
+      });
+      if (!stage) throw new NotFoundException('Growth stage not found');
+      if (dto.config !== undefined) {
+        try {
+          validatePlantLayer(dto.config, buildParameterObjectSchema(stage.plantProfileVersion.sourceCatalogVersion.parameterDefinitions, { partial: true }));
+        } catch (error) {
+          throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Stage configuration is invalid');
+        }
+      }
       const updated = await tx.growthStage.update({
         where: { id: stageId },
         data: {
@@ -442,9 +543,9 @@ export class PlantsService {
         },
         include: { parameterConfig: true },
       });
-      await tx.plantConfigAuditEvent.create({ data: { actorUserId: actor.id, organizationId, action: 'GROWTH_STAGE_EDITED', entityType: 'GrowthStage', entityId: stageId } });
+      await tx.plantConfigAuditEvent.create({ data: { actorUserId: actor.id, organizationId, action: 'GROWTH_STAGE_EDITED', entityType: 'GrowthStage', entityId: stageId, details: { draftRevision: nextRevision } } });
       return updated;
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   }
 
   async listAudit(organizationId: string, actor: AuthenticatedUser) {
@@ -524,26 +625,37 @@ export class PlantsService {
 
   async adoptCatalogVersion(organizationId: string, profileId: string, dto: AdoptPlantCatalogVersionDto, actor: AuthenticatedUser) {
     await this.requireOrganization(actor.id, organizationId, true);
-    const profile = await this.prisma.plantProfile.findFirst({
-      where: { id: profileId, organizationId },
-      include: { versions: { orderBy: { version: 'desc' }, take: 1, include: { growthStages: { include: { parameterConfig: true }, orderBy: { sequence: 'asc' } } } } },
-    });
-    if (!profile) throw new NotFoundException('Plant profile not found');
-    const prior = profile.versions[0];
-    if (!prior) throw new ConflictException('Plant profile has no source version');
-    if (prior.status !== PlantProfileVersionStatus.VALIDATED) {
-      throw new ConflictException('Only a validated profile version can be used as an adoption base');
-    }
     const source = await this.getPublishedCatalogVersion(dto.catalogVersionId, organizationId);
-    if (source.plantCatalogId !== profile.plantCatalogId) throw new ConflictException('Catalog source cannot change for an existing profile');
-    const latest = await this.prisma.plantProfileVersion.aggregate({ where: { plantProfileId: profileId }, _max: { version: true } });
     return this.prisma.$transaction(async (tx) => {
+      const lockedProfiles = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id"
+        FROM "plant_profiles"
+        WHERE "id" = ${profileId}
+          AND "organizationId" = ${organizationId}
+          AND "status" = 'ACTIVE'
+        FOR UPDATE
+      `;
+      if (lockedProfiles.length === 0) throw new NotFoundException('Plant profile not found');
+      const profile = await tx.plantProfile.findFirst({
+        where: { id: profileId, organizationId, status: 'ACTIVE' },
+        include: { versions: { orderBy: { version: 'desc' }, take: 1, include: { growthStages: { include: { parameterConfig: true }, orderBy: { sequence: 'asc' } } } } },
+      });
+      if (!profile) throw new NotFoundException('Plant profile not found');
+      if (source.plantCatalogId !== profile.plantCatalogId) throw new ConflictException('Catalog source cannot change for an existing profile');
+      const prior = profile.versions[0];
+      if (!prior) throw new ConflictException('Plant profile has no source version');
+      if (prior.status === PlantProfileVersionStatus.DRAFT) {
+        throw new ConflictException({ code: 'PROFILE_DRAFT_ALREADY_EXISTS', message: 'A draft version already exists' });
+      }
+      if (prior.status !== PlantProfileVersionStatus.VALIDATED) {
+        throw new ConflictException('Only a validated profile version can be used as an adoption base');
+      }
       const version = await tx.plantProfileVersion.create({
         data: {
         plantProfileId: profileId,
         organizationId,
         plantCatalogId: profile.plantCatalogId,
-        version: (latest._max.version ?? 0) + 1,
+        version: prior.version + 1,
         sourceCatalogVersionId: source.id,
         adoptedFromVersionId: prior.id,
         status: PlantProfileVersionStatus.DRAFT,
@@ -570,46 +682,47 @@ export class PlantsService {
         data: { actorUserId: actor.id, organizationId, action: 'CATALOG_VERSION_ADOPTED', entityType: 'PlantProfileVersion', entityId: version.id, fromChecksum: prior.checksum, details: { sourceCatalogVersionId: source.id } },
       });
       return version;
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   }
 
-  async validateProfileVersion(organizationId: string, versionId: string, actor: AuthenticatedUser) {
+  async validateProfileVersion(organizationId: string, versionId: string, expectedRevision: number, actor: AuthenticatedUser) {
     await this.requireOrganization(actor.id, organizationId, true);
-    const version = await this.prisma.plantProfileVersion.findFirst({
-      where: { id: versionId, organizationId },
-      include: {
-        sourceCatalogVersion: { include: { parameterDefinitions: true } },
-        growthStages: { orderBy: { sequence: 'asc' }, include: { parameterConfig: true } },
-      },
-    });
-    if (!version) throw new NotFoundException('Plant profile version not found');
-    if (version.status !== PlantProfileVersionStatus.DRAFT) throw new ConflictException('Only draft profile versions can be validated');
-    if (version.growthStages.length === 0) throw new UnprocessableEntityException('At least one growth stage is required');
-    const schema = buildParameterObjectSchema(version.sourceCatalogVersion.parameterDefinitions);
-    const definitions = version.sourceCatalogVersion.parameterDefinitions;
-    const partialSchema = buildParameterObjectSchema(definitions, { partial: true });
-    try {
-      validatePlantLayer(version.profileConfig as Record<string, unknown>, partialSchema);
-      for (const stage of version.growthStages) {
-        const stageConfig = (stage.parameterConfig?.config ?? EMPTY_CONFIG) as Record<string, unknown>;
-        const effective = mergePlantConfig(version.profileConfig as Record<string, unknown>, stageConfig);
-        validatePlantLayer(effective, schema);
-      }
-    } catch (error) {
-      throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Plant profile configuration is invalid');
-    }
-    const checksum = configChecksum({
-      sourceCatalogChecksum: version.sourceCatalogVersion.checksum,
-      configSchemaVersion: version.configSchemaVersion,
-      profileConfig: version.profileConfig,
-      stages: version.growthStages.map((stage) => ({
-        code: stage.code, sequence: stage.sequence,
-        minDurationDays: stage.minDurationDays, maxDurationDays: stage.maxDurationDays,
-        transitionCriteria: stage.transitionCriteria,
-        config: stage.parameterConfig?.config ?? {},
-      })),
-    });
     return this.prisma.$transaction(async (tx) => {
+      const sealedRevision = await this.claimDraftRevision(tx, organizationId, versionId, expectedRevision);
+      const version = await tx.plantProfileVersion.findFirst({
+        where: { id: versionId, organizationId, status: PlantProfileVersionStatus.DRAFT, draftRevision: sealedRevision },
+        include: {
+          sourceCatalogVersion: { include: { parameterDefinitions: true } },
+          growthStages: { orderBy: { sequence: 'asc' }, include: { parameterConfig: true } },
+        },
+      });
+      if (!version) return this.throwDraftRevisionConflict(tx, organizationId, versionId, expectedRevision);
+      if (version.growthStages.length === 0) throw new UnprocessableEntityException('At least one growth stage is required');
+      const schema = buildParameterObjectSchema(version.sourceCatalogVersion.parameterDefinitions);
+      const definitions = version.sourceCatalogVersion.parameterDefinitions;
+      const partialSchema = buildParameterObjectSchema(definitions, { partial: true });
+      try {
+        validatePlantLayer(version.profileConfig as Record<string, unknown>, partialSchema);
+        for (const stage of version.growthStages) {
+          const stageConfig = (stage.parameterConfig?.config ?? EMPTY_CONFIG) as Record<string, unknown>;
+          const effective = mergePlantConfig(version.profileConfig as Record<string, unknown>, stageConfig);
+          validatePlantLayer(effective, schema);
+        }
+      } catch (error) {
+        throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Plant profile configuration is invalid');
+      }
+      const checksum = configChecksum({
+        sourceCatalogChecksum: version.sourceCatalogVersion.checksum,
+        configSchemaVersion: version.configSchemaVersion,
+        draftRevision: sealedRevision,
+        profileConfig: version.profileConfig,
+        stages: version.growthStages.map((stage) => ({
+          code: stage.code, sequence: stage.sequence,
+          minDurationDays: stage.minDurationDays, maxDurationDays: stage.maxDurationDays,
+          transitionCriteria: stage.transitionCriteria,
+          config: stage.parameterConfig?.config ?? {},
+        })),
+      });
       for (const stage of version.growthStages) {
         if (!stage.parameterConfig) continue;
         await tx.stageParameterConfig.update({
@@ -622,65 +735,98 @@ export class PlantsService {
           },
         });
       }
-      const validated = await tx.plantProfileVersion.update({
-        where: { id: version.id },
+      const sealed = await tx.plantProfileVersion.updateMany({
+        where: { id: version.id, organizationId, status: PlantProfileVersionStatus.DRAFT, draftRevision: sealedRevision },
         data: { status: PlantProfileVersionStatus.VALIDATED, checksum, validatedAt: new Date(), validatedByUserId: actor.id },
       });
+      if (sealed.count !== 1) return this.throwDraftRevisionConflict(tx, organizationId, versionId, expectedRevision);
+      const validated = await tx.plantProfileVersion.findFirst({ where: { id: versionId, organizationId } });
+      if (!validated) throw new NotFoundException('Plant profile version not found');
       await tx.plantConfigAuditEvent.create({
-        data: { actorUserId: actor.id, organizationId, action: 'PLANT_PROFILE_VERSION_VALIDATED', entityType: 'PlantProfileVersion', entityId: version.id, toChecksum: checksum },
+        data: { actorUserId: actor.id, organizationId, action: 'PLANT_PROFILE_VERSION_VALIDATED', entityType: 'PlantProfileVersion', entityId: version.id, toChecksum: checksum, details: { draftRevision: sealedRevision } },
       });
       return validated;
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   }
 
-  async activateZone(zoneId: string, dto: ActivatePlantProfileDto, actor: AuthenticatedUser) {
+  async activateZone(zoneId: string, dto: ActivatePlantProfileDto, idempotencyKey: string | undefined, actor: AuthenticatedUser) {
     await this.requireOrganization(actor.id, dto.organizationId, true);
-    const zone = await this.prisma.zone.findFirst({
-      where: { id: zoneId, deletedAt: null },
-      select: { id: true, greenhouseId: true, greenhouse: { select: { organizationId: true } } },
-    });
-    if (!zone || zone.greenhouse.organizationId !== dto.organizationId) throw new NotFoundException('Zone not found in organization');
-    const version = await this.prisma.plantProfileVersion.findFirst({
-      where: { id: dto.plantProfileVersionId, organizationId: dto.organizationId, status: PlantProfileVersionStatus.VALIDATED },
-      include: { sourceCatalogVersion: { include: { parameterDefinitions: true } } },
-    });
-    if (!version) throw new UnprocessableEntityException('A validated plant profile version is required');
-    const stage = await this.prisma.growthStage.findFirst({ where: { id: dto.growthStageId, plantProfileVersionId: version.id }, include: { parameterConfig: true } });
-    if (!stage) throw new UnprocessableEntityException('Growth stage must belong to the selected profile version');
-    const current = await this.prisma.zonePlantAssignment.findFirst({ where: { zoneId, status: ZonePlantAssignmentStatus.ACTIVE } });
-    const schema = buildParameterObjectSchema(version.sourceCatalogVersion.parameterDefinitions);
-    const effective = mergePlantConfig(
-      (version.profileConfig as Record<string, unknown>),
-      (stage.parameterConfig?.config ?? EMPTY_CONFIG) as Record<string, unknown>,
+    const requestKey = requireIdempotencyKey(idempotencyKey);
+    const payload = {
+      operation: ZoneActivationOperation.ACTIVATE,
+      organizationId: dto.organizationId,
+      zoneId,
+      plantProfileVersionId: dto.plantProfileVersionId,
+      growthStageId: dto.growthStageId,
+    };
+    const resourceAuthorization = async () => {
+      const actualOrganizationId = await this.authorization.zoneOrganizationId(zoneId);
+      if (actualOrganizationId !== dto.organizationId) throw new NotFoundException('Zone not found in organization');
+    };
+    await resourceAuthorization();
+
+    return this.executeZoneOperation(
+      dto.organizationId,
+      ZoneActivationOperation.ACTIVATE,
+      requestKey,
+      payload,
+      actor,
+      resourceAuthorization,
+      async (tx, key, requestHash) => {
+        const zone = await this.lockZoneForOrganization(tx, zoneId, dto.organizationId);
+        const replay = await this.findZoneOperationReplay(tx, dto.organizationId, ZoneActivationOperation.ACTIVATE, key, requestHash);
+        if (replay) return replay;
+
+        await tx.$queryRaw`SELECT "id" FROM "plant_profile_versions" WHERE "id" = ${dto.plantProfileVersionId} AND "organizationId" = ${dto.organizationId} AND "status" = 'VALIDATED' FOR SHARE`;
+        const version = await tx.plantProfileVersion.findFirst({
+          where: { id: dto.plantProfileVersionId, organizationId: dto.organizationId, status: PlantProfileVersionStatus.VALIDATED },
+          include: { sourceCatalogVersion: { include: { parameterDefinitions: true } } },
+        });
+        if (!version) throw new UnprocessableEntityException('A validated plant profile version is required');
+        const stage = await tx.growthStage.findFirst({
+          where: { id: dto.growthStageId, plantProfileVersionId: version.id },
+          include: { parameterConfig: true },
+        });
+        if (!stage) throw new UnprocessableEntityException('Growth stage must belong to the selected profile version');
+        const effective = mergePlantConfig(
+          version.profileConfig as Record<string, unknown>,
+          (stage.parameterConfig?.config ?? EMPTY_CONFIG) as Record<string, unknown>,
+        );
+        try {
+          validatePlantLayer(effective, buildParameterObjectSchema(version.sourceCatalogVersion.parameterDefinitions));
+        } catch (error) {
+          throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Effective zone configuration is invalid');
+        }
+
+        const current = await tx.zonePlantAssignment.findFirst({ where: { zoneId, organizationId: dto.organizationId, status: ZonePlantAssignmentStatus.ACTIVE } });
+        if (current) {
+          await tx.zonePlantAssignment.update({ where: { id: current.id }, data: { status: ZonePlantAssignmentStatus.ENDED, endedAt: new Date() } });
+        }
+        const assignment = await tx.zonePlantAssignment.create({
+          data: {
+            zoneId,
+            greenhouseId: zone.greenhouseId,
+            organizationId: dto.organizationId,
+            plantProfileVersionId: version.id,
+            growthStageId: stage.id,
+            status: ZonePlantAssignmentStatus.ACTIVE,
+            assignedByUserId: actor.id,
+          },
+        });
+        await tx.plantConfigAuditEvent.create({
+          data: {
+            actorUserId: actor.id,
+            organizationId: dto.organizationId,
+            action: 'ZONE_PLANT_ACTIVATED',
+            entityType: 'ZonePlantAssignment',
+            entityId: assignment.id,
+            toChecksum: configChecksum({ profileVersionChecksum: version.checksum, stageConfigChecksum: stage.parameterConfig?.checksum, effective }),
+          },
+        });
+        await this.saveZoneOperationResult(tx, dto.organizationId, ZoneActivationOperation.ACTIVATE, key, requestHash, actor.id, assignment);
+        return assignment;
+      },
     );
-    try {
-      validatePlantLayer(effective, schema);
-    } catch (error) {
-      throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Effective zone configuration is invalid');
-    }
-    return this.prisma.$transaction(async (tx) => {
-      if (current) {
-        await tx.zonePlantAssignment.update({ where: { id: current.id }, data: { status: ZonePlantAssignmentStatus.ENDED, endedAt: new Date() } });
-      }
-      const assignment = await tx.zonePlantAssignment.create({
-        data: {
-          zoneId, greenhouseId: zone.greenhouseId, organizationId: dto.organizationId,
-          plantProfileVersionId: version.id, growthStageId: stage.id,
-          status: ZonePlantAssignmentStatus.ACTIVE, assignedByUserId: actor.id,
-        },
-      });
-      await tx.plantConfigAuditEvent.create({
-        data: {
-          actorUserId: actor.id,
-          organizationId: dto.organizationId,
-          action: 'ZONE_PLANT_ACTIVATED',
-          entityType: 'ZonePlantAssignment',
-          entityId: assignment.id,
-          toChecksum: configChecksum({ profileVersionChecksum: version.checksum, stageConfigChecksum: stage.parameterConfig?.checksum, effective }),
-        },
-      });
-      return assignment;
-    });
   }
 
   async updateZoneOverride(assignmentId: string, dto: CreateZoneOverrideDto, actor: AuthenticatedUser) {
@@ -729,18 +875,53 @@ export class PlantsService {
     });
   }
 
-  async revokeAssignment(assignmentId: string, organizationId: string, actor: AuthenticatedUser) {
+  async revokeAssignment(assignmentId: string, organizationId: string, idempotencyKey: string | undefined, actor: AuthenticatedUser) {
     await this.requireOrganization(actor.id, organizationId, true);
-    const assignment = await this.prisma.zonePlantAssignment.findFirst({ where: { id: assignmentId, organizationId } });
-    if (!assignment) throw new NotFoundException('Zone plant assignment not found');
-    if (assignment.status !== ZonePlantAssignmentStatus.ACTIVE) return assignment;
-    return this.prisma.$transaction(async (tx) => {
-      const ended = await tx.zonePlantAssignment.update({ where: { id: assignmentId }, data: { status: ZonePlantAssignmentStatus.ENDED, endedAt: new Date() } });
-      await tx.plantConfigAuditEvent.create({
-        data: { actorUserId: actor.id, organizationId, action: 'ZONE_PLANT_DEACTIVATED', entityType: 'ZonePlantAssignment', entityId: assignmentId },
-      });
-      return ended;
+    const requestKey = requireIdempotencyKey(idempotencyKey);
+    const initialAssignment = await this.prisma.zonePlantAssignment.findFirst({
+      where: { id: assignmentId, organizationId },
+      select: { id: true, zoneId: true },
     });
+    if (!initialAssignment) throw new NotFoundException('Zone plant assignment not found');
+    const resourceAuthorization = async () => {
+      const actualOrganizationId = await this.authorization.zoneOrganizationId(initialAssignment.zoneId);
+      if (actualOrganizationId !== organizationId) throw new NotFoundException('Zone plant assignment not found');
+      const current = await this.prisma.zonePlantAssignment.findFirst({ where: { id: assignmentId, organizationId }, select: { id: true } });
+      if (!current) throw new NotFoundException('Zone plant assignment not found');
+    };
+    await resourceAuthorization();
+    const payload = { operation: ZoneActivationOperation.DEACTIVATE, organizationId, assignmentId };
+
+    return this.executeZoneOperation(
+      organizationId,
+      ZoneActivationOperation.DEACTIVATE,
+      requestKey,
+      payload,
+      actor,
+      resourceAuthorization,
+      async (tx, key, requestHash) => {
+        await this.lockZoneForOrganization(tx, initialAssignment.zoneId, organizationId);
+        const replay = await this.findZoneOperationReplay(tx, organizationId, ZoneActivationOperation.DEACTIVATE, key, requestHash);
+        if (replay) return replay;
+
+        const assignment = await tx.zonePlantAssignment.findFirst({ where: { id: assignmentId, organizationId, zoneId: initialAssignment.zoneId } });
+        if (!assignment) throw new NotFoundException('Zone plant assignment not found');
+        if (assignment.status !== ZonePlantAssignmentStatus.ACTIVE) {
+          throw new ConflictException('Only an active assignment can be deactivated');
+        }
+        const changed = await tx.zonePlantAssignment.updateMany({
+          where: { id: assignmentId, organizationId, zoneId: initialAssignment.zoneId, status: ZonePlantAssignmentStatus.ACTIVE },
+          data: { status: ZonePlantAssignmentStatus.ENDED, endedAt: new Date() },
+        });
+        if (changed.count !== 1) throw new ConflictException('Assignment state changed; reload and retry');
+        const ended = await tx.zonePlantAssignment.findUniqueOrThrow({ where: { id: assignmentId } });
+        await tx.plantConfigAuditEvent.create({
+          data: { actorUserId: actor.id, organizationId, action: 'ZONE_PLANT_DEACTIVATED', entityType: 'ZonePlantAssignment', entityId: assignmentId },
+        });
+        await this.saveZoneOperationResult(tx, organizationId, ZoneActivationOperation.DEACTIVATE, key, requestHash, actor.id, ended);
+        return ended;
+      },
+    );
   }
 
   async effectiveZoneConfig(assignmentId: string, actor: AuthenticatedUser) {
@@ -776,6 +957,124 @@ export class PlantsService {
     };
   }
 
+  private async executeZoneOperation<T>(
+    organizationId: string,
+    operation: ZoneActivationOperation,
+    idempotencyKey: string,
+    payload: unknown,
+    actor: AuthenticatedUser,
+    resourceAuthorization: () => Promise<void>,
+    execute: (tx: Prisma.TransactionClient, key: string, requestHash: string) => Promise<T>,
+  ): Promise<T> {
+    const requestHash = configChecksum(payload);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          await this.assertActiveActorAndMembership(tx, actor.id, organizationId);
+          return execute(tx, idempotencyKey, requestHash);
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+      } catch (error) {
+        if (isIdempotencyUniqueConflict(error)) {
+          // The conflicting transaction has rolled back. Recheck current authorization and
+          // resource scope before reading a result created by another request.
+          await this.requireOrganization(actor.id, organizationId, true);
+          await resourceAuthorization();
+          const existing = await this.prisma.zoneActivationRequest.findUnique({
+            where: { organizationId_operation_idempotencyKey: { organizationId, operation, idempotencyKey } },
+          });
+          if (!existing) throw this.retryableZoneOperationException();
+          if (existing.requestHash !== requestHash) {
+            throw new ConflictException({
+              code: 'IDEMPOTENCY_KEY_REUSED',
+              message: 'Idempotency-Key was already used with a different request',
+            });
+          }
+          return existing.response as T;
+        }
+        if (!isRetryableTransactionConflict(error)) throw error;
+        if (attempt === 2) throw this.retryableZoneOperationException();
+        await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+      }
+    }
+    throw this.retryableZoneOperationException();
+  }
+
+  private async assertActiveActorAndMembership(tx: Prisma.TransactionClient, userId: string, organizationId: string) {
+    const users = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "users" WHERE "id" = ${userId} AND "isActive" = TRUE FOR SHARE
+    `;
+    if (!users[0]) throw new ForbiddenException('Active user account required');
+    const organizations = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} AND "deletedAt" IS NULL FOR SHARE
+    `;
+    if (!organizations[0]) throw new NotFoundException('Organization not found');
+    const memberships = await tx.$queryRaw<Array<{ role: string }>>`
+      SELECT "role" FROM "organization_memberships"
+      WHERE "userId" = ${userId} AND "organizationId" = ${organizationId}
+      FOR SHARE
+    `;
+    if (!memberships[0]) throw new ForbiddenException('You do not have access to this organization');
+    if (memberships[0].role !== UserRole.OWNER && memberships[0].role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Organization administrator role required');
+    }
+  }
+
+  private async lockZoneForOrganization(tx: Prisma.TransactionClient, zoneId: string, organizationId: string) {
+    const zones = await tx.$queryRaw<Array<{ id: string; greenhouseId: string; organizationId: string }>>`
+      SELECT z."id", z."greenhouseId", g."organizationId"
+      FROM "zones" AS z
+      JOIN "greenhouses" AS g ON g."id" = z."greenhouseId"
+      WHERE z."id" = ${zoneId} AND z."deletedAt" IS NULL AND g."deletedAt" IS NULL
+      FOR UPDATE OF z
+    `;
+    const zone = zones[0];
+    if (!zone || zone.organizationId !== organizationId) throw new NotFoundException('Zone not found in organization');
+    return zone;
+  }
+
+  private async findZoneOperationReplay(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    operation: ZoneActivationOperation,
+    idempotencyKey: string,
+    requestHash: string,
+  ) {
+    const existing = await tx.zoneActivationRequest.findUnique({
+      where: { organizationId_operation_idempotencyKey: { organizationId, operation, idempotencyKey } },
+    });
+    if (!existing) return null;
+    if (existing.requestHash !== requestHash) {
+      throw new ConflictException({
+        code: 'IDEMPOTENCY_KEY_REUSED',
+        message: 'Idempotency-Key was already used with a different request',
+      });
+    }
+    return existing.response;
+  }
+
+  private async saveZoneOperationResult(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    operation: ZoneActivationOperation,
+    idempotencyKey: string,
+    requestHash: string,
+    actorUserId: string,
+    response: unknown,
+  ) {
+    const snapshot = JSON.parse(JSON.stringify(response)) as Prisma.InputJsonValue;
+    await tx.zoneActivationRequest.create({
+      data: { organizationId, operation, idempotencyKey, requestHash, actorUserId, response: snapshot },
+    });
+  }
+
+  private retryableZoneOperationException() {
+    return new ServiceUnavailableException({
+      code: 'RETRYABLE_TRANSACTION_CONFLICT',
+      message: 'Zone operation could not be serialized; retry with the same Idempotency-Key',
+      retryAfterSeconds: 1,
+    });
+  }
+
   private async getPublishedCatalogVersion(id: string, organizationId: string) {
     const version = await this.prisma.plantCatalogVersion.findUnique({
       where: { id }, include: { parameterDefinitions: true },
@@ -790,6 +1089,52 @@ export class PlantsService {
     await this.requireOrganization(actor.id, organizationId, manage);
     const version = await this.prisma.plantCatalogVersion.findFirst({ where: { id: versionId, plantCatalog: { organizationId } }, select: { id: true } });
     if (!version) throw new NotFoundException('Plant catalog version not found');
+  }
+
+  private async claimDraftRevision(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    versionId: string,
+    expectedRevision: number,
+  ): Promise<number> {
+    const claimed = await tx.plantProfileVersion.updateMany({
+      where: {
+        id: versionId,
+        organizationId,
+        status: PlantProfileVersionStatus.DRAFT,
+        draftRevision: expectedRevision,
+      },
+      data: { draftRevision: { increment: 1 } },
+    });
+    if (claimed.count !== 1) {
+      return this.throwDraftRevisionConflict(tx, organizationId, versionId, expectedRevision);
+    }
+    return expectedRevision + 1;
+  }
+
+  private async throwDraftRevisionConflict(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    versionId: string,
+    expectedRevision: number,
+  ): Promise<never> {
+    const current = await tx.plantProfileVersion.findFirst({
+      where: { id: versionId, organizationId },
+      select: { status: true, draftRevision: true },
+    });
+    if (!current) throw new NotFoundException('Plant profile version not found');
+    if (current.status !== PlantProfileVersionStatus.DRAFT) {
+      throw new ConflictException({
+        code: 'PROFILE_VERSION_NOT_DRAFT',
+        message: 'Only draft profile versions can be changed or validated',
+      });
+    }
+    throw new ConflictException({
+      code: 'STALE_DRAFT_REVISION',
+      message: 'The draft changed; reload it before retrying',
+      expectedRevision,
+      currentRevision: current.draftRevision,
+    });
   }
 
   private async requireOrganization(userId: string, organizationId: string, manage: boolean) {
@@ -868,26 +1213,11 @@ export class PlantsService {
   }
 
   private validateCatalogDraftConfiguration(
-    version: { profileDefaults: unknown; stageTemplates: unknown },
+    version: { profileDefaults: unknown; stageTemplates: unknown; edgeCompatibility?: unknown },
     definitions: Array<{ parameterKey: string; valueSchema: unknown; metadataSchema?: unknown }>,
   ) {
     try {
-      const schema = buildParameterObjectSchema(definitions);
-      const partialSchema = buildParameterObjectSchema(definitions, { partial: true });
-      const defaults = version.profileDefaults as Record<string, unknown>;
-      validatePlantLayer(defaults, partialSchema);
-      const templates = version.stageTemplates as unknown[];
-      if (!templates.length) {
-        validatePlantLayer(defaults, schema);
-        return;
-      }
-      for (const [index, template] of templates.entries()) {
-        if (!isRecord(template)) throw new Error(`Stage template ${index + 1} must be an object`);
-        const config = template.config ?? EMPTY_CONFIG;
-        if (!isRecord(config)) throw new Error('Stage template config must be an object');
-        validatePlantLayer(config, partialSchema);
-        validatePlantLayer(mergePlantConfig(defaults, config), schema);
-      }
+      validateCatalogConfiguration(version, definitions);
     } catch (error) {
       throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Catalog draft configuration is invalid');
     }

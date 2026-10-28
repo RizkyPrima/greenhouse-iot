@@ -88,6 +88,17 @@ describe('ResearchGrantsService', () => {
     expect(h.commits).toBe(1);
   });
 
+  it('allows a grant administrator to delegate the narrow scientific evidence curator permission', async () => {
+    const h = harness();
+    await h.service.create('research-user-1', actor, PlatformPermission.SCIENTIFIC_EVIDENCE_CURATOR);
+    expect(h.tx.platformAdminGrant.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ userId: 'research-user-1', permission: 'SCIENTIFIC_EVIDENCE_CURATOR', grantedByUserId: actor.id }),
+    });
+    expect(h.tx.plantConfigAuditEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'SCIENTIFIC_EVIDENCE_CURATOR_GRANT_CREATED', details: expect.objectContaining({ permission: 'SCIENTIFIC_EVIDENCE_CURATOR' }) }),
+    });
+  });
+
   it('rejects self-grant before opening a transaction', async () => {
     const h = harness();
     await expect(h.service.create(actor.id, actor)).rejects.toBeInstanceOf(ForbiddenException);

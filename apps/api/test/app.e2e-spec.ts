@@ -34,13 +34,25 @@ describe('Greenhouse API (e2e)', () => {
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     const email = `phase6-e2e-${Date.now()}@example.com`;
-    await request(app.getHttpServer()).post('/api/auth/register').send({
-      email, password: 'Phase6Password123!', name: 'Phase 6 E2E',
+    const registration = await request(app.getHttpServer()).post('/api/auth/register').send({
+      email,
+      password: 'Phase6Password123!',
+      name: 'Phase 6 E2E',
+      organizationAction: 'create',
+      organizationName: `Phase 6 E2E ${Date.now()}`,
+      organizationSlug: `phase6-e2e-${Date.now()}`,
     }).expect(201);
     const login = await request(app.getHttpServer()).post('/api/auth/login').send({
       email, password: 'Phase6Password123!',
     }).expect(200);
     accessToken = login.body.data.accessToken;
+
+    await request(app.getHttpServer()).post('/api/greenhouses').set('Authorization', `Bearer ${accessToken}`).send({
+      organizationId: registration.body.data.organization.id,
+      name: 'Phase 6 E2E Greenhouse',
+      code: 'GH-E2E-001',
+      timezone: 'Asia/Jakarta',
+    }).expect(201);
 
   });
 

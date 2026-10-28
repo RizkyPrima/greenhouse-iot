@@ -25,6 +25,7 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include <time.h>
 
 // ==============================================================================================
@@ -53,6 +54,7 @@ const char* FIRMWARE_VER  = "1.0.0-esp32s3";
 char TOPIC_TELEMETRY[80];
 char TOPIC_STATUS[80];
 char TOPIC_COMMAND[80];
+char TOPIC_CONFIG[80];
 char TOPIC_RESPONSE[80];
 
 // ==============================================================================================
@@ -78,6 +80,16 @@ char TOPIC_RESPONSE[80];
 // ==============================================================================================
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
+Preferences configPreferences;
+
+const char* MONITORING_SENSOR_CODES[] = {
+  "temperature", "humidity", "soil_moisture", "light_intensity"
+};
+const uint8_t MAX_MONITORING_SENSOR_CODES = 4;
+char configuredSensorCodes[MAX_MONITORING_SENSOR_CODES][24];
+uint8_t configuredSensorCount = 4;
+uint32_t plantConfigurationVersion = 0;
+char plantConfigurationId[40] = "";
 
 unsigned long lastTelemetryMillis = 0;
 const unsigned long TELEMETRY_INTERVAL_MS = 5000; // Kirim telemetri setiap 5 detik
@@ -118,7 +130,60 @@ void initTopics() {
   snprintf(TOPIC_TELEMETRY, sizeof(TOPIC_TELEMETRY), "greenhouse/%s/%s/telemetry", GREENHOUSE_ID, DEVICE_ID);
   snprintf(TOPIC_STATUS,    sizeof(TOPIC_STATUS),    "greenhouse/%s/%s/status",    GREENHOUSE_ID, DEVICE_ID);
   snprintf(TOPIC_COMMAND,   sizeof(TOPIC_COMMAND),   "greenhouse/%s/%s/command",   GREENHOUSE_ID, DEVICE_ID);
-  snprintf(TOPIC_RESPONSE,  sizeof(TOPIC_RESPONSE),  "greenhouse/%s/%s/response",  GREENHOUSE_ID, DEVICE_ID);
+  snprintf(TOPIC_CONFIG,    sizeof(TOPIC_CONFIG),    "greenhouse/%s/%s/config",    GREENHOUSE_ID, DEVICE_ID);
+  snprintf(TOPIC_RESPONSE,  sizeof(TOPIC_RESPONSE), "greenhouse/%s/%s/response", GREENHOUSE_ID, DEVICE_ID);
+}
+
+bool isSupportedMonitoringSensor(const char* code) {
+  for (uint8_t i = 0; i < MAX_MONITORING_SENSOR_CODES; i++) {
+    if (strcmp(code, MONITORING_SENSOR_CODES[i]) == 0) return true;
+  }
+  return false;
+}
+
+bool isConfiguredMonitoringSensor(const char* code) {
+  for (uint8_t i = 0; i < configuredSensorCount; i++) {
+    if (strcmp(code, configuredSensorCodes[i]) == 0) return true;
+  }
+  return false;
+}
+
+void loadPlantConfiguration() {
+  strcpy(configuredSensorCodes[0], "temperature");
+  strcpy(configuredSensorCodes[1], "humidity");
+  strcpy(configuredSensorCodes[2], "soil_moisture");
+  strcpy(configuredSensorCodes[3], "light_intensity");
+  configuredSensorCount = 4;
+
+  if (!configPreferences.begin("plant-config", true)) return;
+  String stored = configPreferences.getString("snapshot", "");
+  configPreferences.end();
+  if (stored.length() == 0) return;
+
+  StaticJsonDocument<512> snapshot;
+  if (deserializeJson(snapshot, stored)) return;
+  JsonArrayConst codes = snapshot["sensorCodes"].as<JsonArrayConst>();
+  const char* storedId = snapshot["configurationId"] | "";
+  const uint32_t storedVersion = snapshot["version"] | 0;
+  if (codes.isNull() || codes.size() == 0 || codes.size() > MAX_MONITORING_SENSOR_CODES
+      || strlen(storedId) == 0 || strlen(storedId) >= sizeof(plantConfigurationId)
+      || storedVersion == 0) return;
+
+  char restoredCodes[MAX_MONITORING_SENSOR_CODES][24];
+  for (uint8_t i = 0; i < codes.size(); i++) {
+    const char* code = codes[i] | "";
+    if (!isSupportedMonitoringSensor(code)) return;
+    for (uint8_t j = 0; j < i; j++) {
+      if (strcmp(code, restoredCodes[j]) == 0) return;
+    }
+    strlcpy(restoredCodes[i], code, sizeof(restoredCodes[i]));
+  }
+  configuredSensorCount = codes.size();
+  for (uint8_t i = 0; i < configuredSensorCount; i++) {
+    strlcpy(configuredSensorCodes[i], restoredCodes[i], sizeof(configuredSensorCodes[i]));
+  }
+  plantConfigurationVersion = storedVersion;
+  strlcpy(plantConfigurationId, storedId, sizeof(plantConfigurationId));
 }
 
 // ==============================================================================================
@@ -196,6 +261,149 @@ void publishCommandResponse(const char* commandId, const char* actuator, const c
   }
 }
 
+const char* parameterKeyForSensor(const char* sensorCode) {
+  if (strcmp(sensorCode, "temperature") == 0) return "air_temperature";
+  if (strcmp(sensorCode, "humidity") == 0) return "relative_humidity";
+  if (strcmp(sensorCode, "soil_moisture") == 0) return "soil_moisture";
+  if (strcmp(sensorCode, "light_intensity") == 0) return "light_intensity";
+  return "";
+}
+
+void publishPlantConfigurationAck(const char* configurationId, uint32_t version, const char* status, const char* error = "") {
+  StaticJsonDocument<384> response;
+  response["type"] = "plant_config";
+  response["deviceId"] = DEVICE_ID;
+  response["configurationId"] = configurationId && strlen(configurationId) < 40 ? configurationId : "";
+  response["version"] = version;
+  response["status"] = status;
+  if (strlen(error) > 0) response["error"] = error;
+  response["ts"] = getEpochTimeMs();
+  char payload[384];
+  serializeJson(response, payload);
+  if (!mqttClient.publish(TOPIC_RESPONSE, payload)) {
+    Serial.printf("[PLANT CONFIG ACK ERROR] Failed to publish status=%s\n", status);
+  }
+}
+
+bool hasOnlyPlantConfigurationFields(JsonObjectConst object) {
+  const char* const allowed[] = {
+    "type", "schema", "configurationId", "version", "mode",
+    "catalogVersionId", "parameterKeys", "sensorCodes"
+  };
+  for (JsonPairConst pair : object) {
+    bool found = false;
+    for (uint8_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
+      if (strcmp(pair.key().c_str(), allowed[i]) == 0) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) return false;
+  }
+  return true;
+}
+
+void rejectPlantConfiguration(const char* configurationId, uint32_t version, const char* reason) {
+  publishPlantConfigurationAck(configurationId, version, "REJECTED", reason);
+  Serial.printf("[PLANT CONFIG REJECTED] %s\n", reason);
+}
+
+void handlePlantConfigurationPayload(const byte* payload, unsigned int length) {
+  if (length >= 1024) {
+    rejectPlantConfiguration("", 0, "payload_too_large");
+    return;
+  }
+  char jsonBuffer[1024];
+  memcpy(jsonBuffer, payload, length);
+  jsonBuffer[length] = '\0';
+
+  StaticJsonDocument<768> doc;
+  if (deserializeJson(doc, jsonBuffer) || !doc.is<JsonObject>()) {
+    rejectPlantConfiguration("", 0, "invalid_json");
+    return;
+  }
+  JsonObjectConst object = doc.as<JsonObjectConst>();
+  const char* configurationId = object["configurationId"] | "";
+  const char* schema = object["schema"] | "";
+  const char* mode = object["mode"] | "";
+  const char* type = object["type"] | "";
+  const char* catalogVersionId = object["catalogVersionId"] | "";
+  const uint32_t version = object["version"] | 0;
+  JsonArrayConst parameterKeys = object["parameterKeys"].as<JsonArrayConst>();
+  JsonArrayConst sensorCodes = object["sensorCodes"].as<JsonArrayConst>();
+
+  if (!hasOnlyPlantConfigurationFields(object)
+      || strcmp(type, "plant_config") != 0
+      || strcmp(schema, "plant-monitoring/v1") != 0
+      || strcmp(mode, "monitoring_only") != 0
+      || strlen(configurationId) == 0 || strlen(configurationId) >= 40
+      || strlen(catalogVersionId) == 0 || strlen(catalogVersionId) > 100
+      || version == 0
+      || sensorCodes.isNull() || parameterKeys.isNull()
+      || sensorCodes.size() == 0 || sensorCodes.size() > MAX_MONITORING_SENSOR_CODES
+      || parameterKeys.size() != sensorCodes.size()) {
+    rejectPlantConfiguration(configurationId, version, "invalid_monitoring_configuration");
+    return;
+  }
+
+  char nextSensorCodes[MAX_MONITORING_SENSOR_CODES][24];
+  for (uint8_t i = 0; i < sensorCodes.size(); i++) {
+    const char* sensorCode = sensorCodes[i] | "";
+    const char* parameterKey = parameterKeys[i] | "";
+    if (!isSupportedMonitoringSensor(sensorCode)
+        || strcmp(parameterKey, parameterKeyForSensor(sensorCode)) != 0) {
+      rejectPlantConfiguration(configurationId, version, "unsupported_or_mismatched_sensor");
+      return;
+    }
+    for (uint8_t j = 0; j < i; j++) {
+      if (strcmp(sensorCode, nextSensorCodes[j]) == 0) {
+        rejectPlantConfiguration(configurationId, version, "duplicate_sensor_code");
+        return;
+      }
+    }
+    strlcpy(nextSensorCodes[i], sensorCode, sizeof(nextSensorCodes[i]));
+  }
+
+  if (version == plantConfigurationVersion && strcmp(configurationId, plantConfigurationId) == 0) {
+    publishPlantConfigurationAck(configurationId, version, "RECEIVED");
+    publishPlantConfigurationAck(configurationId, version, "APPLIED");
+    return;
+  }
+  if (version <= plantConfigurationVersion) {
+    rejectPlantConfiguration(configurationId, version, "configuration_version_not_newer");
+    return;
+  }
+
+  publishPlantConfigurationAck(configurationId, version, "RECEIVED");
+  StaticJsonDocument<512> snapshot;
+  snapshot["configurationId"] = configurationId;
+  snapshot["version"] = version;
+  JsonArray savedCodes = snapshot.createNestedArray("sensorCodes");
+  for (uint8_t i = 0; i < sensorCodes.size(); i++) savedCodes.add(nextSensorCodes[i]);
+  char snapshotPayload[512];
+  serializeJson(snapshot, snapshotPayload);
+
+  if (!configPreferences.begin("plant-config", false)) {
+    rejectPlantConfiguration(configurationId, version, "persistent_storage_unavailable");
+    return;
+  }
+  const size_t savedBytes = configPreferences.putString("snapshot", snapshotPayload);
+  configPreferences.end();
+  if (savedBytes != strlen(snapshotPayload)) {
+    rejectPlantConfiguration(configurationId, version, "persistent_storage_write_failed");
+    return;
+  }
+
+  configuredSensorCount = sensorCodes.size();
+  for (uint8_t i = 0; i < configuredSensorCount; i++) {
+    strlcpy(configuredSensorCodes[i], nextSensorCodes[i], sizeof(configuredSensorCodes[i]));
+  }
+  plantConfigurationVersion = version;
+  strlcpy(plantConfigurationId, configurationId, sizeof(plantConfigurationId));
+  publishPlantConfigurationAck(configurationId, version, "APPLIED");
+  Serial.printf("[PLANT CONFIG APPLIED] version=%lu sensors=%u\n", (unsigned long)version, configuredSensorCount);
+}
+
 void handleCommandPayload(char* topic, byte* payload, unsigned int length) {
   Serial.printf("\n[MQTT CMD] Received on topic: %s\n", topic);
   if (strcmp(topic, TOPIC_COMMAND) != 0) {
@@ -253,6 +461,14 @@ void handleCommandPayload(char* topic, byte* payload, unsigned int length) {
   publishCommandResponse(commandId, actuator, "success", *state);
 }
 
+void handleMqttPayload(char* topic, byte* payload, unsigned int length) {
+  if (strcmp(topic, TOPIC_CONFIG) == 0) {
+    handlePlantConfigurationPayload(payload, length);
+  } else if (strcmp(topic, TOPIC_COMMAND) == 0) {
+    handleCommandPayload(topic, payload, length);
+  }
+}
+
 // ==============================================================================================
 // 8. MQTT PUBLISH ROUTINES
 // ==============================================================================================
@@ -267,6 +483,13 @@ void publishStatus(const char* statusStr) {
   doc["uptime"]    = (uint32_t)(millis() / 1000);
   doc["firmware"]  = FIRMWARE_VER;
   doc["ts"]        = getEpochTimeMs();
+  JsonObject capabilities = doc.createNestedObject("capabilities");
+  capabilities["plantConfiguration"] = "plant-monitoring/v1";
+  capabilities["sensorDataMode"] = "SIMULATED";
+  JsonArray sensorCodes = capabilities.createNestedArray("sensorCodes");
+  for (uint8_t i = 0; i < MAX_MONITORING_SENSOR_CODES; i++) {
+    sensorCodes.add(MONITORING_SENSOR_CODES[i]);
+  }
 
   char buffer[384];
   size_t n = serializeJson(doc, buffer);
@@ -295,25 +518,30 @@ void publishTelemetry() {
 
   JsonArray sensors = doc.createNestedArray("sensors");
 
-  JsonObject s1 = sensors.createNestedObject();
-  s1["code"]  = "temperature";
-  s1["value"] = round(temp * 10.0) / 10.0;
-  s1["unit"]  = "°C";
-
-  JsonObject s2 = sensors.createNestedObject();
-  s2["code"]  = "humidity";
-  s2["value"] = round(hum * 10.0) / 10.0;
-  s2["unit"]  = "%";
-
-  JsonObject s3 = sensors.createNestedObject();
-  s3["code"]  = "soil_moisture";
-  s3["value"] = round(soil * 10.0) / 10.0;
-  s3["unit"]  = "%";
-
-  JsonObject s4 = sensors.createNestedObject();
-  s4["code"]  = "light_intensity";
-  s4["value"] = round(lux * 10.0) / 10.0;
-  s4["unit"]  = "lux";
+  if (isConfiguredMonitoringSensor("temperature")) {
+    JsonObject reading = sensors.createNestedObject();
+    reading["code"] = "temperature";
+    reading["value"] = round(temp * 10.0) / 10.0;
+    reading["unit"] = "°C";
+  }
+  if (isConfiguredMonitoringSensor("humidity")) {
+    JsonObject reading = sensors.createNestedObject();
+    reading["code"] = "humidity";
+    reading["value"] = round(hum * 10.0) / 10.0;
+    reading["unit"] = "%";
+  }
+  if (isConfiguredMonitoringSensor("soil_moisture")) {
+    JsonObject reading = sensors.createNestedObject();
+    reading["code"] = "soil_moisture";
+    reading["value"] = round(soil * 10.0) / 10.0;
+    reading["unit"] = "%";
+  }
+  if (isConfiguredMonitoringSensor("light_intensity")) {
+    JsonObject reading = sensors.createNestedObject();
+    reading["code"] = "light_intensity";
+    reading["value"] = round(lux * 10.0) / 10.0;
+    reading["unit"] = "lux";
+  }
 
   char buffer[512];
   size_t len = serializeJson(doc, buffer);
@@ -387,6 +615,8 @@ void connectMQTT() {
       // 2. Subscribe ke topic command untuk kontrol aktuator
       mqttClient.subscribe(TOPIC_COMMAND);
       Serial.printf("[MQTT] Subscribed to commands: %s\n", TOPIC_COMMAND);
+      mqttClient.subscribe(TOPIC_CONFIG);
+      Serial.printf("[MQTT] Subscribed to monitoring configuration: %s\n", TOPIC_CONFIG);
       
     } else {
       Serial.printf("[MQTT ERROR] Connection failed, rc=%d. Retrying in 4s...\n", mqttClient.state());
@@ -426,6 +656,7 @@ void setup() {
 
   // Inisialisasi Topic
   initTopics();
+  loadPlantConfiguration();
   Serial.printf("[CONFIG] Greenhouse ID: %s\n", GREENHOUSE_ID);
   Serial.printf("[CONFIG] Device ID:     %s\n", DEVICE_ID);
 
@@ -433,7 +664,7 @@ void setup() {
   // PENTING: Buffer dinaikkan ke 1024 agar payload JSON tidak terpotong!
   mqttClient.setBufferSize(1024);
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
-  mqttClient.setCallback(handleCommandPayload);
+  mqttClient.setCallback(handleMqttPayload);
   mqttClient.setKeepAlive(30);
 
   // Sambungkan ke WiFi

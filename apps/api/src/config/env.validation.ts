@@ -87,6 +87,18 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsOptional()
+  LLM_API_BASE_URL?: string;
+
+  @IsString()
+  @IsOptional()
+  LLM_API_KEY?: string;
+
+  @IsString()
+  @IsOptional()
+  LLM_MODEL?: string;
+
+  @IsString()
+  @IsOptional()
   MQTT_CLIENT_ID: string = 'greenhouse-api';
 
   @Type(() => Number)

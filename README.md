@@ -1,6 +1,6 @@
 # Greenhouse IoT Platform
 
-Smart Greenhouse IoT & Intelligence Platform — Phase 10: Plant Standardization (In Progress)
+Smart Greenhouse IoT & Intelligence Platform — Smart Plant Setup and Standardization
 
 ## Architecture
 
@@ -93,4 +93,4 @@ greenhouse-iot/
 
 - [x] **Phases 1–8** — Completed
 - [ ] **Phase 9** — Skipped
-- [ ] **Phase 10** — In progress: Plant Standardization
+- [ ] **Phase 10** — Plant Standardization, with AI Plant Setup as the guided workflow

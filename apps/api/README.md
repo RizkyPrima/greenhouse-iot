@@ -57,6 +57,92 @@ $ npm run test:e2e
 $ npm run test:cov
 ```
 
+## Plant AI recommendations (Phase 10.7)
+
+The recommendation provider uses Gemini's official OpenAI-compatible endpoint. Configure
+`LLM_API_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` in the backend environment; never put the
+API key in frontend code, source control, or logs. `LLM_MODEL` is deliberately not defaulted:
+check the [model list](https://ai.google.dev/gemini-api/docs/models) and active
+[AI Studio rate limits](https://aistudio.google.com/rate-limit?timeRange=last-28-days) for your
+project before choosing a model ID. Gemini 3.1 Flash-Lite is a text-output model with
+[documented structured-output support](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite);
+use it only if it is listed and enabled for your project.
+
+The first request requires a published source Plant Standard, a validated profile version,
+one of its growth stages, and verified evidence matching the crop, stage, and parameter.
+With a backend JWT for an organization owner/admin, send:
+
+```powershell
+curl.exe -X POST "http://localhost:3001/api/organizations/<ORG_ID>/plant-profiles/<PROFILE_ID>/recommendations" `
+  -H "Authorization: Bearer <JWT>" `
+  -H "Content-Type: application/json" `
+  -d "{\"profileVersionId\":\"<VALIDATED_PROFILE_VERSION_ID>\",\"growthStageId\":\"<GROWTH_STAGE_ID>\"}"
+```
+
+The website's `/plant-ai-recommendations` page also supports recording organization evidence.
+An evidence record is always created as `UNVERIFIED`; an owner/admin must inspect the cited
+source and locator and submit a review reason before it can enter AI retrieval. The evidence
+list endpoint is `GET /organizations/:organizationId/scientific-evidence`; it returns the
+organization's records plus globally verified records, not unverified records from other
+organizations. Evidence may cite an HTTP(S) canonical URL or an existing registered source.
+
+Each validated profile version is pinned to one published catalog version. Adding definitions
+to a newer catalog draft does not change older profile versions: publish the draft, create a
+new profile draft, adopt the newly published catalog version, validate that profile version,
+then select it in the recommendation page. Parameter schemas can define type and unit without
+inventing agronomic thresholds; numeric evidence must use the exact catalog unit to be eligible.
+
+The API retrieves matching verified evidence, requests structured JSON from Gemini, and
+passes the result through the existing validator and proposal workflow. It does not publish
+standards or control actuators. Provider, key, quota, timeout, and invalid-output failures
+return structured errors and do not create a proposal.
+
+## AI Plant Setup
+
+The website's primary entry point is `/plant-setup` (shown as **Konfigurasi Tanaman**). It sends the
+plant identity and cultivation method to the configured Gemini provider to propose parameter identities and growth-stage labels.
+The response schema intentionally has no fields for values, ranges, units, citations, or source
+URLs. Those are not produced as facts or marked verified. The user reviews/edits candidates and
+can save a tenant-scoped catalog version as `DRAFT`; the version is never published by generation.
+Manual parameter/stage changes and their origin are recorded in the existing configuration audit.
+Source search is not part of this call: the Research Source Registry requires its existing platform
+permission. The setup page does not fabricate recommendations, citations, or source matches; use
+the evidence workflow and the existing recommendation engine after the profile is validated.
+The explicit **Setujui & terbitkan standar** action calls the existing catalog publish validator,
+then creates or adopts a profile draft from that published version. The profile remains a draft
+until its existing profile validation workflow is completed. Catalog/profile state can be resumed
+from the setup page; published standards remain immutable.
+
+After the standard is published, the same page can list compatible ESP32-S3 devices and their last
+reported monitoring capability. Applying a selection is a separate, explicit OWNER/ADMIN action.
+The API publishes a versioned monitoring-only payload to the device's `/config` topic, while the
+firmware's actuator handler remains isolated on `/command`. The page distinguishes broker publish,
+device receipt, and confirmed application. The current firmware reports simulated sensor data and
+supports only air temperature, relative humidity, soil moisture, and light intensity; pH, TDS, and
+water temperature are not remotely configurable on this firmware.
+
+This delivery feature requires the additive migration
+`prisma/migrations/20261028170000_phase10_7_monitoring_config_delivery/migration.sql`. No migration
+is run by the application or this workflow. Confirm the target database, then apply it using the
+approved deployment procedure before invoking:
+
+- `GET /organizations/:organizationId/plant-config-devices`
+- `POST /organizations/:organizationId/devices/:deviceId/plant-configurations`
+- `GET /organizations/:organizationId/device-plant-configurations/:configurationId`
+
+The firmware reports support in status heartbeats and acknowledges on `/response` using
+`type: "plant_config"`. Broker publish success alone never means the device applied the configuration.
+
+The corresponding owner/admin endpoint is
+`POST /organizations/:organizationId/plant-setups/generate`. Its request includes `commonName`,
+`cultivationMethod` (`hydroponic_tower`, `hydroponic_nft`, `hydroponic_dwc`, `soil`, or `other`),
+and optional scientific name, cultivar, and stage context. It writes no database rows.
+`POST /organizations/:organizationId/plant-catalog` and the existing draft-version/parameter APIs
+are used only after the user chooses **Simpan draft setup**. A live provider smoke test is opt-in:
+set `LLM_LIVE_TEST=true` in the API test process (with the three LLM variables configured) and run
+`npm test -- --no-file-parallelism src/plants/gemini.live.spec.ts` from `apps/api`. Without this
+flag, the live test is skipped; mocked provider tests do not establish live Gemini availability.
+
 ## Deployment
 
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.

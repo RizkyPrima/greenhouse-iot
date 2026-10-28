@@ -4,9 +4,11 @@ import {
   GrowthStage, PlantParameterDefinition, PlatformAdminGrant, PlantConfigAuditEvent, ZonePlantAssignment,
   ZoneParameterOverride, ZonePlantAssignmentDetails, EffectiveZonePlantConfig, CreatePlantCatalogDto, CreatePlantCatalogVersionDto,
   UpdatePlantCatalogVersionDto, CreatePlantParameterDefinitionDto, UpdatePlantParameterDefinitionDto,
-  CreatePlantProfileDto, UpdatePlantProfileDraftDto, CreateGrowthStageDto, UpdateGrowthStageDto,
+  CreatePlantProfileDto, UpdatePlantProfileDraftDto, CreateDraftGrowthStageDto, UpdateGrowthStageDto,
   AdoptPlantCatalogVersionDto, ActivatePlantProfileDto, CreateZoneOverrideDto, CreatePlatformGrantDto,
-  PlatformCapabilities,
+  PlatformCapabilities, PlantAiProposalRecord,
+  PlantRecommendationResult, PlantScientificEvidenceRecord, GeneratePlantSetupDto, PlantSetupCandidateResult,
+  PlantConfigurationDevice, DevicePlantConfigurationDelivery,
 } from '@/types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
@@ -127,14 +129,25 @@ class ApiClient {
 
     if (!response.ok) {
       let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+      let errorCode: string | undefined;
+      let currentRevision: number | undefined;
       try {
         const errorData = await response.json();
-        errorMsg = errorData.message || errorData.error || errorMsg;
+        if (errorData.message && typeof errorData.message === 'object') {
+          errorCode = errorData.message.code || errorData.code;
+          currentRevision = errorData.message.currentRevision;
+          errorMsg = errorData.message.message || errorCode || JSON.stringify(errorData.message);
+        } else {
+          errorCode = errorData.code;
+          errorMsg = errorData.message || errorData.error || errorMsg;
+        }
       } catch {
         // use default errorMsg
       }
-      const error: Error & { status?: number } = new Error(errorMsg);
+      const error: Error & { status?: number; code?: string; currentRevision?: number } = new Error(errorMsg);
       error.status = response.status;
+      error.code = errorCode;
+      error.currentRevision = currentRevision;
       throw error;
     }
 
@@ -269,6 +282,28 @@ class ApiClient {
     return this.request<Sensor[]>(`/devices/${id}/sensors`);
   }
 
+  async getPlantConfigurationDevices(organizationId: string): Promise<PlantConfigurationDevice[]> {
+    return this.request<PlantConfigurationDevice[]>(`/organizations/${encodeURIComponent(organizationId)}/plant-config-devices`);
+  }
+
+  async applyDevicePlantConfiguration(
+    organizationId: string,
+    deviceId: string,
+    payload: { configurationId: string; catalogVersionId: string; parameterKeys: string[] },
+  ): Promise<DevicePlantConfigurationDelivery> {
+    return this.request<DevicePlantConfigurationDelivery>(`/organizations/${encodeURIComponent(organizationId)}/devices/${encodeURIComponent(deviceId)}/plant-configurations`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getDevicePlantConfiguration(
+    organizationId: string,
+    configurationId: string,
+  ): Promise<DevicePlantConfigurationDelivery> {
+    return this.request<DevicePlantConfigurationDelivery>(`/organizations/${encodeURIComponent(organizationId)}/device-plant-configurations/${encodeURIComponent(configurationId)}`);
+  }
+
   async getDeviceActuators(id: string): Promise<Actuator[]> {
     return this.request<Actuator[]>(`/devices/${id}/actuators`);
   }
@@ -359,6 +394,30 @@ class ApiClient {
     return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/versions/${encodeURIComponent(versionId)}/publish`, { method: 'POST' });
   }
 
+  async getPlantProposals(organizationId: string): Promise<PlantAiProposalRecord[]> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-ai-proposals`);
+  }
+
+  async decidePlantProposal(organizationId: string, proposalId: string, decision: 'approve' | 'reject', reason: string): Promise<PlantAiProposalRecord> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-ai-proposals/${encodeURIComponent(proposalId)}/${decision}`, { method: 'POST', body: JSON.stringify({ reason }) });
+  }
+
+  async applyPlantProposal(organizationId: string, proposalId: string): Promise<PlantCatalogVersion> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-ai-proposals/${encodeURIComponent(proposalId)}/apply`, { method: 'POST' });
+  }
+
+  async verifyPlantEvidence(evidenceId: string, reason: string) {
+    return this.request(`/scientific-evidence/${encodeURIComponent(evidenceId)}/verify`, { method: 'POST', body: JSON.stringify({ reason }) });
+  }
+
+  async getPlantEvidence(organizationId: string): Promise<PlantScientificEvidenceRecord[]> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/scientific-evidence`);
+  }
+
+  async createPlantEvidence(organizationId: string, contract: Record<string, unknown>): Promise<PlantScientificEvidenceRecord> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/scientific-evidence`, { method: 'POST', body: JSON.stringify({ contract }) });
+  }
+
   async createPlatformAdminGrant(payload: CreatePlatformGrantDto): Promise<PlatformAdminGrant> {
     return this.request('/platform-admin-grants', { method: 'POST', body: JSON.stringify(payload) });
   }
@@ -375,6 +434,14 @@ class ApiClient {
     return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-profiles/${encodeURIComponent(profileId)}`);
   }
 
+  async createPlantRecommendation(organizationId: string, profileId: string, payload: { profileVersionId: string; growthStageId: string }): Promise<PlantRecommendationResult> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-profiles/${encodeURIComponent(profileId)}/recommendations`, { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  async generatePlantSetup(organizationId: string, payload: GeneratePlantSetupDto): Promise<PlantSetupCandidateResult> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-setups/generate`, { method: 'POST', body: JSON.stringify(payload) });
+  }
+
   async createPlantProfile(organizationId: string, payload: CreatePlantProfileDto): Promise<PlantProfile> {
     return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-profiles`, { method: 'POST', body: JSON.stringify(payload) });
   }
@@ -387,7 +454,7 @@ class ApiClient {
     return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-profile-versions/${encodeURIComponent(versionId)}/draft`, { method: 'PATCH', body: JSON.stringify(payload) });
   }
 
-  async createGrowthStage(organizationId: string, versionId: string, payload: CreateGrowthStageDto): Promise<GrowthStage> {
+  async createGrowthStage(organizationId: string, versionId: string, payload: CreateDraftGrowthStageDto): Promise<GrowthStage> {
     return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-profile-versions/${encodeURIComponent(versionId)}/stages`, { method: 'POST', body: JSON.stringify(payload) });
   }
 
@@ -399,16 +466,23 @@ class ApiClient {
     return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-profiles/${encodeURIComponent(profileId)}/adoptions`, { method: 'POST', body: JSON.stringify(payload) });
   }
 
-  async validatePlantProfileVersion(organizationId: string, versionId: string): Promise<PlantProfileVersion> {
-    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-profile-versions/${encodeURIComponent(versionId)}/validate`, { method: 'POST' });
+  async validatePlantProfileVersion(organizationId: string, versionId: string, expectedRevision: number): Promise<PlantProfileVersion> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-profile-versions/${encodeURIComponent(versionId)}/validate`, {
+      method: 'POST',
+      body: JSON.stringify({ expectedRevision }),
+    });
   }
 
   async getPlantConfigAudit(organizationId: string): Promise<PlantConfigAuditEvent[]> {
     return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-config-audit`);
   }
 
-  async activatePlantProfileInZone(zoneId: string, payload: ActivatePlantProfileDto): Promise<ZonePlantAssignment> {
-    return this.request(`/zones/${encodeURIComponent(zoneId)}/plant-assignments`, { method: 'POST', body: JSON.stringify(payload) });
+  async activatePlantProfileInZone(zoneId: string, payload: ActivatePlantProfileDto, idempotencyKey: string): Promise<ZonePlantAssignment> {
+    return this.request(`/zones/${encodeURIComponent(zoneId)}/plant-assignments`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify(payload),
+    });
   }
 
   async getZonePlantAssignments(zoneId: string): Promise<ZonePlantAssignmentDetails[]> {
@@ -419,8 +493,11 @@ class ApiClient {
     return this.request(`/plant-assignments/${encodeURIComponent(assignmentId)}/overrides`, { method: 'POST', body: JSON.stringify(payload) });
   }
 
-  async deactivateZonePlantAssignment(organizationId: string, assignmentId: string): Promise<ZonePlantAssignment> {
-    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-assignments/${encodeURIComponent(assignmentId)}/deactivate`, { method: 'POST' });
+  async deactivateZonePlantAssignment(organizationId: string, assignmentId: string, idempotencyKey: string): Promise<ZonePlantAssignment> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-assignments/${encodeURIComponent(assignmentId)}/deactivate`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+    });
   }
 
   async getEffectiveZonePlantConfig(assignmentId: string): Promise<EffectiveZonePlantConfig> {

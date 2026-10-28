@@ -8,6 +8,34 @@ const ajv = new Ajv2020({ allErrors: true, strict: true, validateFormats: false 
 
 type JsonSchema = Record<string, unknown>;
 
+const STAGE_TEMPLATES_SCHEMA: JsonSchema = {
+  $schema: PLANT_SCHEMA_DIALECT,
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      code: { type: 'string', minLength: 1 },
+      label: { type: 'string', minLength: 1 },
+      sequence: { type: 'integer', minimum: 1 },
+      config: { type: 'object' },
+    },
+    required: ['code', 'label', 'sequence'],
+    additionalProperties: false,
+  },
+};
+
+const EDGE_COMPATIBILITY_SCHEMA: JsonSchema = {
+  $schema: PLANT_SCHEMA_DIALECT,
+  type: 'object',
+  properties: {
+    mode: { const: 'monitoring_only' },
+    controller: { type: 'string', minLength: 1 },
+    schema_version: { type: 'integer', minimum: 1 },
+    actuator_commands_enabled: { const: false },
+  },
+  additionalProperties: false,
+};
+
 /** RFC 8785-compatible canonicalization for JSON values representable by JSON.parse/stringify. */
 export function canonicalJson(value: unknown): string {
   if (typeof value === 'number' && !Number.isFinite(value)) throw new TypeError('Canonical JSON cannot contain non-finite numbers');
@@ -80,4 +108,58 @@ export function buildParameterObjectSchema(
 
 export function validatePlantLayer(layer: Record<string, unknown>, schema: JsonSchema): void {
   validateConfig(schema, layer);
+}
+
+export function validateCatalogConfiguration(
+  version: { profileDefaults: unknown; stageTemplates: unknown; edgeCompatibility?: unknown },
+  definitions: Array<{ parameterKey: string; valueSchema: unknown; metadataSchema?: unknown }>,
+): void {
+  const schema = buildParameterObjectSchema(definitions);
+  const partialSchema = buildParameterObjectSchema(definitions, { partial: true });
+
+  if (!version.profileDefaults || typeof version.profileDefaults !== 'object' || Array.isArray(version.profileDefaults)) {
+    throw new Error('profileDefaults must be a JSON object');
+  }
+  try {
+    validatePlantLayer(version.profileDefaults as Record<string, unknown>, partialSchema);
+  } catch (error) {
+    throw new Error(`profileDefaults: ${error instanceof Error ? error.message : 'configuration is invalid'}`);
+  }
+
+  try {
+    validateConfig(STAGE_TEMPLATES_SCHEMA, version.stageTemplates);
+  } catch (error) {
+    throw new Error(`stageTemplates: ${error instanceof Error ? error.message : 'configuration is invalid'}`);
+  }
+
+  const templates = version.stageTemplates as Array<Record<string, unknown>>;
+  const codes = new Set<string>();
+  const sequences = new Set<number>();
+  for (const [index, template] of templates.entries()) {
+    if (codes.has(template.code as string)) throw new Error(`stageTemplates/${index}/code must be unique`);
+    if (sequences.has(template.sequence as number)) throw new Error(`stageTemplates/${index}/sequence must be unique`);
+    codes.add(template.code as string);
+    sequences.add(template.sequence as number);
+    const config = template.config ?? {};
+    try {
+      validatePlantLayer(config as Record<string, unknown>, partialSchema);
+      validatePlantLayer(mergePlantConfig(version.profileDefaults as Record<string, unknown>, config as Record<string, unknown>), schema);
+    } catch (error) {
+      throw new Error(`stageTemplates/${index}/config: ${error instanceof Error ? error.message : 'configuration is invalid'}`);
+    }
+  }
+  if (templates.length === 0) {
+    try {
+      validatePlantLayer(version.profileDefaults as Record<string, unknown>, schema);
+    } catch (error) {
+      throw new Error(`profileDefaults: ${error instanceof Error ? error.message : 'configuration is invalid'}`);
+    }
+  }
+
+  if (version.edgeCompatibility === undefined || version.edgeCompatibility === null) return;
+  try {
+    validateConfig(EDGE_COMPATIBILITY_SCHEMA, version.edgeCompatibility);
+  } catch (error) {
+    throw new Error(`edgeCompatibility: ${error instanceof Error ? error.message : 'configuration is invalid'}`);
+  }
 }

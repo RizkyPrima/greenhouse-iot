@@ -8,7 +8,7 @@ import { ArrowLeft, Check, Leaf, LoaderCircle, Plus, Save, Trash2 } from 'lucide
 import { DashboardLayout } from '@/components/layout/dashboard-layout';
 import { useAuth } from '@/context/auth-context';
 import { apiClient } from '@/lib/api-client';
-import type { CreatePlantCatalogVersionDto, CreatePlantParameterDefinitionDto, PlantJsonObject, PlantParameterDefinition, UpdatePlantParameterDefinitionDto } from '@/types';
+import type { CreatePlantCatalogVersionDto, CreatePlantParameterDefinitionDto, PlantCatalogVersion, PlantJsonObject, PlantParameterDefinition, UpdatePlantCatalogVersionDto, UpdatePlantParameterDefinitionDto } from '@/types';
 
 function apiError(error: unknown): { message: string; status?: number } {
   const status = (error as Error & { status?: number })?.status;
@@ -46,6 +46,11 @@ export default function PlantCatalogDetailPage() {
   const [versionDefaults, setVersionDefaults] = useState('{}');
   const [stageTemplates, setStageTemplates] = useState('[]');
   const [edgeCompatibility, setEdgeCompatibility] = useState('{}');
+  const [editingVersionId, setEditingVersionId] = useState<string | null>(null);
+  const [draftDefaults, setDraftDefaults] = useState('{}');
+  const [draftStageTemplates, setDraftStageTemplates] = useState('[]');
+  const [draftEdgeCompatibility, setDraftEdgeCompatibility] = useState('{}');
+  const [draftConfigError, setDraftConfigError] = useState('');
   const [parameterVersionId, setParameterVersionId] = useState<string | null>(null);
   const [parameterForm, setParameterForm] = useState<ParameterForm>(blankParameter);
   const [editingParameter, setEditingParameter] = useState<PlantParameterDefinition | null>(null);
@@ -90,6 +95,11 @@ export default function PlantCatalogDetailPage() {
     mutationFn: (versionId: string) => apiClient.publishPlantCatalogVersion(organizationId!, versionId),
     onSuccess: async () => { await invalidateCatalogs(); await queryClient.invalidateQueries({ queryKey: ['plant-catalog'] }); },
   });
+  const updateVersion = useMutation({
+    mutationFn: ({ versionId, payload }: { versionId: string; payload: UpdatePlantCatalogVersionDto }) => apiClient.updatePlantCatalogVersion(organizationId!, versionId, payload),
+    onSuccess: async () => { setEditingVersionId(null); setDraftConfigError(''); await invalidateCatalogs(); },
+    onError: (error) => setDraftConfigError(apiError(error).message),
+  });
 
   const versions = useMemo(() => catalogQuery.data?.versions ?? [], [catalogQuery.data?.versions]);
 
@@ -104,6 +114,35 @@ export default function PlantCatalogDetailPage() {
       createVersion.mutate({ profileDefaults: defaults, stageTemplates: templates as CreatePlantCatalogVersionDto['stageTemplates'], edgeCompatibility: edge });
     } catch (error) {
       setVersionError((error as Error).message || 'Format JSON tidak valid.');
+    }
+  }
+
+  function beginEditingVersion(version: PlantCatalogVersion) {
+    setEditingVersionId(version.id);
+    setDraftDefaults(JSON.stringify(version.profileDefaults ?? {}, null, 2));
+    setDraftStageTemplates(JSON.stringify(version.stageTemplates ?? [], null, 2));
+    setDraftEdgeCompatibility(JSON.stringify(version.edgeCompatibility ?? {}, null, 2));
+    setDraftConfigError('');
+  }
+
+  function submitVersionUpdate(event: FormEvent<HTMLFormElement>, versionId: string) {
+    event.preventDefault();
+    setDraftConfigError('');
+    try {
+      const defaults = parseJsonObject(draftDefaults, 'Profile defaults');
+      const templates: unknown = JSON.parse(draftStageTemplates);
+      if (!Array.isArray(templates)) throw new Error('Stage templates harus berupa JSON array.');
+      const edge = parseJsonObject(draftEdgeCompatibility, 'Edge compatibility');
+      updateVersion.mutate({
+        versionId,
+        payload: {
+          profileDefaults: defaults,
+          stageTemplates: templates as UpdatePlantCatalogVersionDto['stageTemplates'],
+          edgeCompatibility: edge,
+        },
+      });
+    } catch (error) {
+      setDraftConfigError((error as Error).message || 'Format JSON tidak valid.');
     }
   }
 
@@ -168,7 +207,7 @@ export default function PlantCatalogDetailPage() {
 
             {canAdminister && (
               <form onSubmit={submitVersion} className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-5 sm:p-6">
-                <div><h2 className="font-semibold text-white">Buat draft version</h2><p className="mt-1 text-xs text-slate-400">Nilai konfigurasi dikirim sebagai JSON object/array sesuai DTO backend.</p></div>
+                <div><h2 className="font-semibold text-white">Buat draft version</h2><p className="mt-1 text-xs text-slate-400">Profile defaults dan setiap config stage hanya menerima parameterKey yang sudah didefinisikan. Template memakai code, label, sequence, dan config. Edge compatibility hanya menerima mode, controller, schema_version, dan actuator_commands_enabled (false).</p></div>
                 <div className="grid gap-4 lg:grid-cols-3">
                   <label className="space-y-1.5 text-xs text-slate-300">Profile defaults (JSON object)<textarea value={versionDefaults} onChange={(e) => setVersionDefaults(e.target.value)} rows={5} className="w-full rounded-lg border border-slate-700 bg-slate-950 p-3 font-mono text-xs text-slate-200 outline-none focus:border-emerald-500" /></label>
                   <label className="space-y-1.5 text-xs text-slate-300">Stage templates (JSON array)<textarea value={stageTemplates} onChange={(e) => setStageTemplates(e.target.value)} rows={5} className="w-full rounded-lg border border-slate-700 bg-slate-950 p-3 font-mono text-xs text-slate-200 outline-none focus:border-emerald-500" /></label>
@@ -185,9 +224,10 @@ export default function PlantCatalogDetailPage() {
                 const isDraft = version.status === 'DRAFT';
                 return <article key={version.id} className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50">
                   <div className="flex flex-col gap-3 border-b border-slate-800 p-5 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold text-slate-100">Versi {version.version}</h3><span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${isDraft ? 'bg-amber-500/10 text-amber-300' : version.status === 'PUBLISHED' ? 'bg-emerald-500/10 text-emerald-300' : 'bg-slate-800 text-slate-400'}`}>{version.status}</span></div><p className="mt-1 text-xs text-slate-500">Schema {version.configSchemaVersion} · {version.checksum ? `SHA checksum ${version.checksum.slice(0, 12)}…` : 'Belum memiliki checksum'}</p></div>
-                    {canAdminister && isDraft && <button onClick={() => { if (window.confirm(`Publikasikan versi ${version.version}? Setelah dipublikasikan, versi menjadi immutable.`)) publishVersion.mutate(version.id); }} disabled={publishVersion.isPending} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"><Check className="h-4 w-4" />{publishVersion.isPending && publishVersion.variables === version.id ? 'Menerbitkan…' : 'Publish'}</button>}
+                    {canAdminister && isDraft && <div className="flex gap-2"><button type="button" onClick={() => beginEditingVersion(version)} className="rounded-lg border border-slate-700 px-3.5 py-2 text-sm text-slate-200 hover:border-emerald-500/40">Edit konfigurasi</button><button onClick={() => { if (window.confirm(`Publikasikan versi ${version.version}? Setelah dipublikasikan, versi menjadi immutable.`)) publishVersion.mutate(version.id); }} disabled={publishVersion.isPending} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"><Check className="h-4 w-4" />{publishVersion.isPending && publishVersion.variables === version.id ? 'Menerbitkan…' : 'Publish'}</button></div>}
                   </div>
                   {publishVersion.isError && publishVersion.variables === version.id && <p role="alert" className="border-b border-rose-500/20 bg-rose-500/10 px-5 py-3 text-sm text-rose-300">{apiError(publishVersion.error).message}</p>}
+                  {editingVersionId === version.id && isDraft && canAdminister && <form onSubmit={(event) => submitVersionUpdate(event, version.id)} className="grid gap-4 border-b border-slate-800 bg-slate-950/50 p-5 lg:grid-cols-3"><label className="space-y-1.5 text-xs text-slate-300">Profile defaults (JSON object)<textarea value={draftDefaults} onChange={(event) => setDraftDefaults(event.target.value)} rows={8} className="w-full rounded-lg border border-slate-700 bg-slate-950 p-3 font-mono text-xs text-slate-200" /></label><label className="space-y-1.5 text-xs text-slate-300">Stage templates (JSON array; code, label, sequence, config)<textarea value={draftStageTemplates} onChange={(event) => setDraftStageTemplates(event.target.value)} rows={8} className="w-full rounded-lg border border-slate-700 bg-slate-950 p-3 font-mono text-xs text-slate-200" /></label><label className="space-y-1.5 text-xs text-slate-300">Edge compatibility (JSON object; mode, controller, schema_version, actuator_commands_enabled=false)<textarea value={draftEdgeCompatibility} onChange={(event) => setDraftEdgeCompatibility(event.target.value)} rows={8} className="w-full rounded-lg border border-slate-700 bg-slate-950 p-3 font-mono text-xs text-slate-200" /></label>{draftConfigError && <p role="alert" className="lg:col-span-3 text-sm text-rose-300">{draftConfigError}</p>}<div className="flex justify-end gap-2 lg:col-span-3"><button type="button" onClick={() => { setEditingVersionId(null); setDraftConfigError(''); }} className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300">Batal</button><button disabled={updateVersion.isPending} className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"><Save className="h-4 w-4" />{updateVersion.isPending ? 'Menyimpan…' : 'Simpan draft'}</button></div></form>}
                   <div className="space-y-4 p-5">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><h4 className="text-sm font-medium text-slate-200">Parameter definitions</h4><p className="text-xs text-slate-500">{version.parameterDefinitions?.length ?? 0} parameter</p></div>{canAdminister && isDraft && <button onClick={() => { setParameterVersionId(parameterVersionId === version.id ? null : version.id); setEditingParameter(null); setParameterForm(blankParameter); setParameterError(''); }} className="inline-flex items-center gap-2 self-start rounded-lg border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 hover:border-emerald-500/40 hover:text-emerald-300"><Plus className="h-3.5 w-3.5" /> Tambah parameter</button>}</div>
                     {(version.parameterDefinitions ?? []).length === 0 ? <p className="rounded-lg bg-slate-950/50 p-4 text-sm text-slate-500">Belum ada parameter dalam versi ini.</p> : <div className="space-y-2">{version.parameterDefinitions?.map((parameter) => <div key={parameter.id} className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-950/40 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="font-mono text-sm text-emerald-300">{parameter.parameterKey}</span><span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] uppercase text-slate-400">{parameter.dataType}</span></div><p className="mt-1 text-sm text-slate-200">{parameter.label}{parameter.unit ? <span className="text-slate-500"> · {parameter.unit}</span> : ''}</p><p className="mt-1 truncate font-mono text-[11px] text-slate-500">{JSON.stringify(parameter.valueSchema)}</p></div>{canAdminister && isDraft && <div className="flex gap-2"><button onClick={() => startEditing(parameter)} className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:bg-slate-800">Ubah</button><button onClick={() => { if (window.confirm(`Hapus parameter ${parameter.parameterKey}?`)) deleteParameter.mutate({ versionId: version.id, parameterId: parameter.id }); }} disabled={deleteParameter.isPending} aria-label={`Hapus ${parameter.parameterKey}`} className="rounded-lg border border-rose-500/20 p-2 text-rose-300 hover:bg-rose-500/10 disabled:opacity-60"><Trash2 className="h-4 w-4" /></button></div>}</div>)}</div>}

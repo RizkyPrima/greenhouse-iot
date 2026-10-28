@@ -26,6 +26,8 @@ const mockPersistence = {
   persistTelemetry: vi.fn().mockResolvedValue('record-1'),
   persistDeviceStatus: vi.fn().mockResolvedValue(undefined),
 };
+const mockCommands = { handleResponse: vi.fn().mockResolvedValue(null) };
+const mockDeviceConfigurations = { handleAcknowledgement: vi.fn().mockResolvedValue(undefined) };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -63,6 +65,10 @@ describe('TelemetryProcessorService', () => {
       mockMqtt as unknown as MqttService,
       mockRealtime as unknown as TelemetryRealtimeService,
       mockPersistence as unknown as TelemetryPersistenceService,
+      undefined,
+      mockCommands as never,
+      undefined,
+      mockDeviceConfigurations as never,
     );
 
     service.onModuleInit();
@@ -157,6 +163,19 @@ describe('TelemetryProcessorService', () => {
       'CTRL001', 'GH001', 'online', expect.any(String),
     );
     expect(mockPersistence.persistDeviceStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes plant configuration acknowledgements away from actuator command handling', async () => {
+    const acknowledgement = {
+      type: 'plant_config',
+      configurationId: 'c5748e28-4c7a-48ef-a742-24bdf37d48e3',
+      version: 1,
+      status: 'APPLIED',
+    };
+    await capturedHandler!(buildMessage('GH001', 'CTRL001', 'response', acknowledgement));
+
+    expect(mockDeviceConfigurations.handleAcknowledgement).toHaveBeenCalledWith('GH001', 'CTRL001', acknowledgement);
+    expect(mockCommands.handleResponse).not.toHaveBeenCalled();
   });
 
   it('should handle valid status message (offline)', async () => {

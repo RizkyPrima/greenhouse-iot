@@ -13,6 +13,7 @@ import {
   Leaf,
   Sprout,
   Layers,
+  Sparkles,
   X,
 } from 'lucide-react';
 
@@ -22,8 +23,11 @@ const navigationItems = [
   { name: 'Devices', href: '/devices', icon: Cpu },
   { name: 'Realtime Feed', href: '/realtime', icon: Activity, badge: 'LIVE' },
   { name: 'Historical Data', href: '/history', icon: History },
+  { name: 'Konfigurasi Tanaman', href: '/plant-setup', icon: Sparkles },
   { name: 'Plant Catalog', href: '/plant-catalog', icon: Leaf },
   { name: 'Plant Profiles', href: '/plant-profiles', icon: Sprout },
+  { name: 'Evidence & AI Review', href: '/plant-ai-recommendations', icon: Sprout },
+  { name: 'Proposal Approval', href: '/plant-proposals', icon: Leaf },
   { name: 'Zone Plant Setup', href: '/plant-assignments', icon: Layers },
   { name: 'Settings & Access', href: '/settings', icon: Settings },
 ];

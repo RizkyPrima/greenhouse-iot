@@ -4,6 +4,16 @@ Panduan operasional dan development backend API serta infrastruktur lokal.
 
 Runbook provisioning platform admin pertama tersedia di [Phase 10.4.2I](phase10-4-2i-platform-admin-bootstrap.md). Provisioning deployment-blocked sampai signer approval tepercaya tersedia; `JWT_SECRET` dan access token aplikasi bukan bukti approval. Verifikasi disposable target dan change-lock tetap prasyarat terpisah untuk integration test.
 
+Prosedur migration idempotensi aktivasi zona Phase 10.1B, termasuk verifikasi target dan batasan bahwa `migrate deploy` menjalankan semua migration pending, tersedia di [Phase 10.1B deployment](phase10/PHASE_10_1B_ZONE_IDEMPOTENCY_DEPLOYMENT.md). Migration tersebut belum diterapkan.
+
+Panduan review bukti, persetujuan proposal, penerapan ke draft, dan publikasi standar tersedia di [Phase 10.3 proposal review](phase10/PHASE_10_3_PROPOSAL_REVIEW_WORKFLOW.md).
+
+Rule Engine dan Decision Manager dry-run Phase 10.5, termasuk kontrak API, prioritas konflik, dan prasyarat sebelum hardware dapat dikontrol, tersedia di [Phase 10.5](phase10/PHASE_10_5_RULE_DECISION_MANAGER.md). Migration Phase 10.5 belum diterapkan.
+
+AI recommendation dan expert evidence review Phase 10.7, termasuk konfigurasi provider OpenAI-compatible, batas retrieval evidence terverifikasi, dan alur proposal/human review, tersedia di [Phase 10.7](phase10/PHASE_10_7_AI_AGRONOMY_RECOMMENDATIONS.md). Provider LLM bersifat opsional; tanpa konfigurasi tidak ada output AI atau proposal yang dibuat.
+
+Batas adapter kontrol edge dan kontrak MQTT yang harus disepakati sebelum automatic actuation tersedia di [Phase 10.6](phase10/PHASE_10_6_EDGE_ADAPTER_BOUNDARY.md).
+
 ---
 
 ## 1. Arsitektur Komponen

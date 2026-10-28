@@ -4,18 +4,22 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { FormEvent, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CheckCircle2, Clock3, Leaf, Plus, Save, Sprout } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Clock3, Leaf, Plus, Save, Sparkles, Sprout } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/dashboard-layout';
 import { PlantProfileVersionDiff } from '@/components/plants/plant-profile-version-diff';
 import { useAuth } from '@/context/auth-context';
 import { apiClient } from '@/lib/api-client';
-import type { CreateGrowthStageDto, PlantJsonObject, PlantProfileVersion, UpdateGrowthStageDto } from '@/types';
+import type { CreateDraftGrowthStageDto, PlantJsonObject, PlantProfileVersion, UpdateGrowthStageDto } from '@/types';
 
 function errorDetails(error: unknown): { status?: number; message: string } {
   const status = (error as Error & { status?: number })?.status;
+  const code = (error as Error & { code?: string })?.code;
   if (status === 401) return { status, message: 'Sesi tidak valid. Silakan masuk kembali.' };
   if (status === 403) return { status, message: 'Akses ditolak. Periksa membership dan role OWNER/ADMIN untuk aksi perubahan.' };
   if (status === 404) return { status, message: 'Profil atau versi tidak ditemukan di organisasi aktif.' };
+  if (status === 409 && code === 'STALE_DRAFT_REVISION') return { status, message: 'Draft berubah sejak dibuka. Data terbaru dimuat; periksa perubahan lalu coba lagi.' };
+  if (status === 409 && code === 'GROWTH_STAGE_CODE_EXISTS') return { status, message: 'Kode growth stage ini sudah ada di versi draft. Edit stage yang ada atau gunakan kode berbeda.' };
+  if (status === 409 && code === 'GROWTH_STAGE_SEQUENCE_EXISTS') return { status, message: 'Urutan growth stage ini sudah digunakan di versi draft. Pilih urutan berbeda.' };
   if (status === 409) return { status, message: 'Aksi ditolak karena lifecycle versi tidak mengizinkan perubahan ini.' };
   if (status === 400 || status === 422) return { status, message: (error as Error).message || 'Konfigurasi atau data tidak valid.' };
   return { status, message: (error as Error)?.message || 'Permintaan gagal. Silakan coba lagi.' };
@@ -73,19 +77,19 @@ export default function PlantProfileDetailPage() {
     onError: (error) => setActionError(errorDetails(error).message),
   });
   const createStage = useMutation({
-    mutationFn: ({ versionId, payload }: { versionId: string; payload: CreateGrowthStageDto }) => apiClient.createGrowthStage(organizationId!, versionId, payload),
+    mutationFn: ({ versionId, payload }: { versionId: string; payload: CreateDraftGrowthStageDto }) => apiClient.createGrowthStage(organizationId!, versionId, payload),
     onSuccess: async () => { setStageError(''); setStageForm(initialStage); await invalidateProfile(); },
-    onError: (error) => setStageError(errorDetails(error).message),
+    onError: async (error) => { setStageError(errorDetails(error).message); if ((error as Error & { status?: number }).status === 409) await invalidateProfile(); },
   });
   const updateStage = useMutation({
     mutationFn: ({ stageId, payload }: { stageId: string; payload: UpdateGrowthStageDto }) => apiClient.updateGrowthStage(organizationId!, stageId, payload),
     onSuccess: async () => { setStageError(''); setEditingStageId(null); await invalidateProfile(); },
-    onError: (error) => setStageError(errorDetails(error).message),
+    onError: async (error) => { setStageError(errorDetails(error).message); if ((error as Error & { status?: number }).status === 409) await invalidateProfile(); },
   });
   const validateVersion = useMutation({
-    mutationFn: (versionId: string) => apiClient.validatePlantProfileVersion(organizationId!, versionId),
+    mutationFn: ({ versionId, expectedRevision }: { versionId: string; expectedRevision: number }) => apiClient.validatePlantProfileVersion(organizationId!, versionId, expectedRevision),
     onSuccess: async (version) => { setActionError(''); setValidationNotice(`Versi ${version.version} berhasil divalidasi.`); await invalidateProfile(); },
-    onError: (error) => { setValidationNotice(''); setActionError(errorDetails(error).message); },
+    onError: async (error) => { setValidationNotice(''); setActionError(errorDetails(error).message); if ((error as Error & { status?: number }).status === 409) await invalidateProfile(); },
   });
 
   const profile = profileQuery.data;
@@ -99,8 +103,11 @@ export default function PlantProfileDetailPage() {
     event.preventDefault();
     setStageError('');
     try {
-      const payload: CreateGrowthStageDto = {
+      const draftVersion = versions.find((version) => version.id === versionId);
+      if (!draftVersion) throw new Error('Versi draft tidak lagi tersedia. Muat ulang profil.');
+      const payload: CreateDraftGrowthStageDto = {
         code: stageForm.code.trim(), label: stageForm.label.trim(), sequence: Number(stageForm.sequence),
+        expectedRevision: draftVersion.draftRevision,
         config: parseObject(stageForm.config, 'Konfigurasi stage'),
       };
       if (!Number.isInteger(payload.sequence) || payload.sequence < 1) throw new Error('Urutan stage harus bilangan bulat minimal 1.');
@@ -120,7 +127,10 @@ export default function PlantProfileDetailPage() {
     try {
       const sequence = Number(stageForm.sequence);
       if (!Number.isInteger(sequence) || sequence < 1) throw new Error('Urutan stage harus bilangan bulat minimal 1.');
+      const draftVersion = versions.find((version) => version.growthStages?.some((stage) => stage.id === stageId));
+      if (!draftVersion) throw new Error('Versi draft tidak lagi tersedia. Muat ulang profil.');
       const payload: UpdateGrowthStageDto = {
+        expectedRevision: draftVersion.draftRevision,
         code: stageForm.code.trim(), label: stageForm.label.trim(), sequence,
         config: parseObject(stageForm.config, 'Konfigurasi stage'),
       };
@@ -149,6 +159,11 @@ export default function PlantProfileDetailPage() {
 
                 {(actionError || validationNotice) && <div role={actionError ? 'alert' : 'status'} className={`rounded-xl border p-4 text-sm ${actionError ? 'border-rose-500/25 bg-rose-500/10 text-rose-200' : 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'}`}>{actionError || validationNotice}</div>}
 
+                {latest?.status === 'VALIDATED' && <section className="flex flex-col gap-3 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-5 sm:flex-row sm:items-center sm:justify-between">
+                  <div><h2 className="flex items-center gap-2 font-semibold text-sky-100"><Sparkles className="h-4 w-4" />Profile siap untuk rekomendasi</h2><p className="mt-1 text-xs text-slate-300">Engine AI akan memakai evidence terverifikasi yang cocok dengan tanaman, parameter, satuan, dan growth stage. Jika bukti tidak mencukupi, engine tidak membuat proposal dengan nilai tebakan.</p></div>
+                  <Link href="/plant-ai-recommendations" className="shrink-0 rounded-lg border border-sky-400/20 px-3 py-2 text-center text-sm font-medium text-sky-200 hover:bg-sky-400/10">Buka rekomendasi AI</Link>
+                </section>}
+
                 <PlantProfileVersionDiff versions={versions} />
 
                 <section className="space-y-4"><div><h2 className="text-lg font-semibold text-white">Riwayat versi</h2><p className="mt-1 text-sm text-slate-400">Versi terbaru ditampilkan lebih dahulu. Perubahan hanya tersedia pada DRAFT.</p></div>
@@ -158,7 +173,7 @@ export default function PlantProfileDetailPage() {
                     const sourceVersion = catalogQuery.data?.versions?.find((catalogVersion) => catalogVersion.id === version.sourceCatalogVersionId);
                     return <article key={version.id} className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50">
                       <div className="flex flex-col gap-3 border-b border-slate-800 p-5 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold text-slate-100">Versi {version.version}</h3><span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${statusStyle(version.status)}`}>{version.status}</span></div><p className="mt-1 break-all font-mono text-[11px] text-slate-500">Sumber katalog: {sourceVersion ? `v${sourceVersion.version} · ${sourceVersion.status}` : version.sourceCatalogVersionId}{version.adoptedFromVersionId ? ` · adopsi dari versi profil ${version.adoptedFromVersionId.slice(0, 8)}` : ''}</p><p className="mt-1 text-xs text-slate-500">Schema {version.configSchemaVersion} · {version.checksum ? `Checksum ${version.checksum.slice(0, 14)}…` : 'Belum tervalidasi'}</p></div>
-                        {canManage && isDraft && <button type="button" onClick={() => { setActionError(''); setValidationNotice(''); validateVersion.mutate(version.id); }} disabled={validateVersion.isPending} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"><CheckCircle2 className="h-4 w-4" />{validateVersion.isPending && validateVersion.variables === version.id ? 'Memvalidasi…' : 'Validasi versi'}</button>}
+                        {canManage && isDraft && <button type="button" onClick={() => { setActionError(''); setValidationNotice(''); validateVersion.mutate({ versionId: version.id, expectedRevision: version.draftRevision }); }} disabled={validateVersion.isPending} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"><CheckCircle2 className="h-4 w-4" />{validateVersion.isPending && validateVersion.variables?.versionId === version.id ? 'Memvalidasi…' : 'Validasi versi'}</button>}
                       </div>
                       <div className="space-y-4 p-5"><div className="flex items-center justify-between"><div><h4 className="text-sm font-medium text-slate-200">Growth stages</h4><p className="text-xs text-slate-500">{stages.length} stage</p></div>{!canManage && <span className="text-xs text-slate-500">Akses baca</span>}</div>
                         {!stages.length ? <p className="rounded-lg bg-slate-950/50 p-4 text-sm text-slate-500">Belum ada growth stage.</p> : <div className="space-y-3">{stages.map((stage) => <div key={stage.id} className="rounded-xl border border-slate-800 bg-slate-950/40 p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rounded-md bg-slate-800 font-mono text-xs text-slate-300">{stage.sequence}</span><h5 className="font-medium text-slate-100">{stage.label}</h5><span className="font-mono text-xs text-slate-500">{stage.code}</span></div><p className="mt-2 break-all font-mono text-[11px] text-slate-500">Config: {JSON.stringify(stage.parameterConfig?.config ?? {})}</p></div>{canManage && isDraft && <button type="button" onClick={() => beginEdit(stage)} className="self-start rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">Edit stage</button>}</div>

@@ -33,6 +33,17 @@ enum CommandStatus {
   TIMEOUT
 }
 
+enum DevicePlantConfigurationStatus {
+  PENDING
+  PUBLISHING
+  SENT
+  RECEIVED
+  APPLIED
+  REJECTED
+  TIMEOUT
+  FAILED
+}
+
 enum UserRole {
   OWNER
   ADMIN
@@ -69,10 +80,36 @@ enum ZonePlantAssignmentStatus {
   CANCELLED
 }
 
+enum ZoneActivationOperation {
+  ACTIVATE
+  DEACTIVATE
+}
+
+enum ZoneRuleSetStatus {
+  DRAFT
+  APPROVED
+  RETIRED
+}
+
+enum ZoneDecisionStatus {
+  DRY_RUN
+  BLOCKED
+  CONFLICT
+}
+
+enum ZoneCommandStatus {
+  NOT_SENT
+  SENT
+  ACKNOWLEDGED
+  TIMEOUT
+  FAILED
+}
+
 enum PlatformPermission {
   PLANT_CATALOG_ADMIN
   RESEARCH_SOURCE_ADMIN
   RESEARCH_SOURCE_GRANT_ADMIN
+  SCIENTIFIC_EVIDENCE_CURATOR
 }
 
 enum ResearchJobType {
@@ -101,6 +138,22 @@ enum ResearchLicenseStatus {
   ALL_RIGHTS_RESERVED
 }
 
+enum ScientificEvidenceVerificationStatus {
+  UNKNOWN
+  UNVERIFIED
+  VERIFIED
+}
+
+enum PlantAiProposalStatus {
+  REQUESTED
+  RESEARCH_PENDING
+  PROPOSED
+  NEEDS_REVIEW
+  INVALID
+  APPROVED
+  REJECTED
+}
+
 // ─── Authentication / User Models ────────────────────────────────────────────
 
 model User {
@@ -125,8 +178,15 @@ model User {
   plantAssignmentsCreated ZonePlantAssignment[] @relation("PlantAssignmentCreator")
   zoneOverridesCreated ZoneParameterOverride[] @relation("ZoneOverrideCreator")
   plantConfigAuditEvents PlantConfigAuditEvent[]
+  zoneActivationRequests ZoneActivationRequest[] @relation("ZoneActivationRequestActor")
+  createdZoneRuleSets ZoneRuleSet[] @relation("ZoneRuleSetCreator")
+  approvedZoneRuleSets ZoneRuleSet[] @relation("ZoneRuleSetApprover")
   researchJobs ResearchJob[]
   researchSources ResearchSource[]
+  scientificEvidenceCreated PlantScientificEvidence[] @relation("ScientificEvidenceCreator")
+  scientificEvidenceVerified PlantScientificEvidence[] @relation("ScientificEvidenceReviewer")
+  plantAiProposalsCreated PlantAiProposal[] @relation("PlantAiProposalCreator")
+  devicePlantConfigurations DevicePlantConfiguration[]
 
   @@map("users")
 }
@@ -181,7 +241,13 @@ model Organization {
   plantCatalogs PlantCatalog[]
   plantProfileVersions PlantProfileVersion[]
   zonePlantAssignments ZonePlantAssignment[]
+  zoneActivationRequests ZoneActivationRequest[]
+  zoneRuleSets ZoneRuleSet[]
+  zoneDecisions ZoneDecision[]
   plantConfigAuditEvents PlantConfigAuditEvent[]
+  plantAiProposals PlantAiProposal[]
+  scientificEvidence PlantScientificEvidence[]
+  devicePlantConfigurations DevicePlantConfiguration[]
 
   @@map("organizations")
 }
@@ -226,6 +292,7 @@ model Zone {
   sensors    Sensor[]
   actuators  Actuator[]
   plantAssignments ZonePlantAssignment[]
+  decisions        ZoneDecision[]
 
   @@unique([greenhouseId, code])
   @@unique([id, greenhouseId])
@@ -254,10 +321,41 @@ model Device {
   actuators        Actuator[]
   telemetryRecords TelemetryRecord[]
   controlCommands  ControlCommand[]
+  plantConfigurations DevicePlantConfiguration[]
+  zoneDecisions    ZoneDecision[]
 
   @@index([greenhouseId])
   @@index([zoneId])
   @@map("devices")
+}
+
+model DevicePlantConfiguration {
+  id                 String                            @id @default(cuid())
+  configurationId    String                            @unique
+  organizationId      String
+  deviceId            String
+  deviceMqttId        String
+  catalogVersionId    String
+  version             Int
+  status              DevicePlantConfigurationStatus   @default(PENDING)
+  payload             Json
+  error               String?
+  createdByUserId     String
+  createdAt           DateTime                          @default(now())
+  sentAt              DateTime?
+  receivedAt          DateTime?
+  appliedAt           DateTime?
+  completedAt         DateTime?
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  device       Device            @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  catalogVersion PlantCatalogVersion @relation(fields: [catalogVersionId], references: [id], onDelete: Restrict)
+  createdBy    User              @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([deviceId, version])
+  @@index([organizationId, createdAt])
+  @@index([deviceId, status, createdAt])
+  @@map("device_plant_configurations")
 }
 
 model Sensor {
@@ -320,7 +418,6 @@ model TelemetryRecord {
   device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
   values TelemetryValue[]
 
-  @@unique([deviceId, sequenceNumber])
   @@index([deviceId])
   @@index([greenhouseId])
   @@index([receivedAt])
@@ -421,8 +518,10 @@ model PlantCatalog {
   organization   Organization?       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   versions       PlantCatalogVersion[]
   profiles       PlantProfile[]
+  aiProposals    PlantAiProposal[]
 
   @@unique([organizationId, code])
+  @@unique([id, organizationId])
   @@index([organizationId, status])
   @@map("plant_catalogs")
 }
@@ -447,6 +546,8 @@ model PlantCatalogVersion {
   publishedBy          User?              @relation("CatalogVersionPublisher", fields: [publishedByUserId], references: [id], onDelete: SetNull)
   parameterDefinitions PlantParameterDefinition[]
   profileVersions      PlantProfileVersion[]
+  aiProposals          PlantAiProposal[]
+  deviceConfigurations DevicePlantConfiguration[]
 
   @@unique([plantCatalogId, version])
   @@unique([id, plantCatalogId])
@@ -500,6 +601,7 @@ model PlantProfileVersion {
   sourceCatalogVersionId   String
   adoptedFromVersionId     String?
   status                   PlantProfileVersionStatus @default(DRAFT)
+  draftRevision            Int                       @default(1)
   configSchemaVersion      String
   profileConfig            Json                      @default("{}")
   checksumAlgorithm        String                    @default("SHA-256/JCS-RFC8785")
@@ -517,6 +619,8 @@ model PlantProfileVersion {
   validatedBy              User?                     @relation("PlantProfileVersionValidator", fields: [validatedByUserId], references: [id], onDelete: SetNull)
   growthStages             GrowthStage[]
   assignments              ZonePlantAssignment[]
+  ruleSets                 ZoneRuleSet[]
+  decisions                ZoneDecision[]
 
   @@unique([plantProfileId, version])
   @@unique([id, organizationId])
@@ -575,10 +679,93 @@ model ZonePlantAssignment {
   growthStage           GrowthStage              @relation(fields: [growthStageId, plantProfileVersionId], references: [id, plantProfileVersionId], onDelete: Restrict)
   assignedBy            User                     @relation("PlantAssignmentCreator", fields: [assignedByUserId], references: [id], onDelete: Restrict)
   overrides             ZoneParameterOverride[]
+  decisions             ZoneDecision[]
 
   @@index([organizationId, zoneId, status])
   @@index([plantProfileVersionId])
   @@map("zone_plant_assignments")
+}
+
+model ZoneActivationRequest {
+  id             String                  @id @default(cuid())
+  organizationId String
+  operation      ZoneActivationOperation
+  idempotencyKey String                  @db.VarChar(200)
+  requestHash    String                  @db.VarChar(64)
+  actorUserId    String
+  response       Json
+  createdAt      DateTime                @default(now())
+  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  actor          User                    @relation("ZoneActivationRequestActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, operation, idempotencyKey])
+  @@index([actorUserId, createdAt])
+  @@map("zone_activation_requests")
+}
+
+model ZoneRuleSet {
+  id                    String            @id @default(cuid())
+  organizationId        String
+  plantProfileVersionId String
+  version               Int
+  status                ZoneRuleSetStatus @default(DRAFT)
+  definition            Json
+  checksum              String            @db.VarChar(64)
+  createdByUserId       String
+  approvedByUserId      String?
+  createdAt             DateTime          @default(now())
+  approvedAt            DateTime?
+  organization          Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  plantProfileVersion   PlantProfileVersion @relation(fields: [plantProfileVersionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  createdBy             User              @relation("ZoneRuleSetCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  approvedBy            User?             @relation("ZoneRuleSetApprover", fields: [approvedByUserId], references: [id], onDelete: Restrict)
+  decisions             ZoneDecision[]
+
+  @@unique([plantProfileVersionId, version])
+  @@unique([id, organizationId])
+  @@index([organizationId, status, createdAt])
+  @@map("zone_rule_sets")
+}
+
+model ZoneDecision {
+  id                    String            @id @default(cuid())
+  decisionKey           String            @unique @db.VarChar(64)
+  organizationId        String
+  zoneId                String
+  assignmentId          String
+  plantProfileVersionId String
+  ruleSetId             String
+  deviceMqttId          String
+  telemetryAt           DateTime
+  status                ZoneDecisionStatus
+  commandStatus         ZoneCommandStatus @default(NOT_SENT)
+  candidates            Json
+  selected              Json?
+  reasons               Json
+  createdAt             DateTime          @default(now())
+  organization          Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  ruleSet               ZoneRuleSet       @relation(fields: [ruleSetId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  zone                  Zone              @relation(fields: [zoneId], references: [id], onDelete: Restrict)
+  assignment            ZonePlantAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  plantProfileVersion   PlantProfileVersion @relation(fields: [plantProfileVersionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  device                Device             @relation(fields: [deviceMqttId], references: [deviceId], onDelete: Restrict)
+  feedback              ZoneDecisionFeedback[]
+
+  @@index([organizationId, zoneId, createdAt])
+  @@index([assignmentId, createdAt])
+  @@map("zone_decisions")
+}
+
+model ZoneDecisionFeedback {
+  id         String   @id @default(cuid())
+  decisionId String
+  feedback   String
+  details    Json?
+  createdAt  DateTime @default(now())
+  decision  ZoneDecision @relation(fields: [decisionId], references: [id], onDelete: Restrict)
+
+  @@index([decisionId, createdAt])
+  @@map("zone_decision_feedback")
 }
 
 model ZoneParameterOverride {
@@ -651,11 +838,73 @@ model ResearchSource {
   updatedAt             DateTime              @updatedAt
   createdBy             User                  @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
   jobResults            ResearchJobSource[]
+  scientificEvidence   PlantScientificEvidence[]
 
   @@index([publicationYear])
   @@unique([alternateIdentifierType, alternateIdentifier])
   @@index([metadataProvider, metadataFetchedAt])
   @@map("research_sources")
+}
+
+// Scientific findings are distinct from ResearchSource metadata. The JSON snapshot
+// preserves the typed contract as received/extracted; sourceId is optional because
+// evidence can be research-pending or supplied before registry reconciliation.
+model PlantScientificEvidence {
+  id                    String                              @id @default(cuid())
+  organizationId        String?
+  sourceId              String?
+  verificationStatus    ScientificEvidenceVerificationStatus @default(UNKNOWN)
+  contract              Json
+  createdByUserId       String
+  verifiedByUserId      String?
+  verifiedAt            DateTime?
+  createdAt             DateTime                            @default(now())
+  updatedAt             DateTime                            @updatedAt
+  organization          Organization?                       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  source                ResearchSource?                     @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  createdBy             User                                @relation("ScientificEvidenceCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  verifiedBy            User?                               @relation("ScientificEvidenceReviewer", fields: [verifiedByUserId], references: [id], onDelete: Restrict)
+  proposalLinks         PlantAiProposalEvidence[]
+
+  @@index([organizationId, verificationStatus, createdAt])
+  @@index([sourceId])
+  @@index([verificationStatus, createdAt])
+  @@map("plant_scientific_evidence")
+}
+
+// Immutable-by-convention, reproducible proposal snapshots. Application services in
+// a later phase will enforce transitions and organization/catalog scope.
+model PlantAiProposal {
+  id                    String                    @id @default(cuid())
+  organizationId        String
+  plantCatalogId        String
+  targetCatalogVersionId String?
+  status                PlantAiProposalStatus     @default(REQUESTED)
+  contract              Json
+  createdByUserId       String
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+  organization           Organization             @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  plantCatalog           PlantCatalog             @relation(fields: [plantCatalogId, organizationId], references: [id, organizationId], onDelete: Restrict, map: "plant_ai_proposals_plantCatalogId_organizationId_fkey")
+  targetCatalogVersion   PlantCatalogVersion?     @relation(fields: [targetCatalogVersionId, plantCatalogId], references: [id, plantCatalogId], onDelete: Restrict, map: "plant_ai_proposals_target_version_catalog_fkey")
+  createdBy              User                     @relation("PlantAiProposalCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  evidenceLinks          PlantAiProposalEvidence[]
+
+  @@index([organizationId, status, createdAt])
+  @@index([plantCatalogId, createdAt])
+  @@index([targetCatalogVersionId])
+  @@map("plant_ai_proposals")
+}
+
+model PlantAiProposalEvidence {
+  proposalId String
+  evidenceId String
+  proposal   PlantAiProposal        @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  evidence   PlantScientificEvidence @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
+
+  @@id([proposalId, evidenceId])
+  @@index([evidenceId])
+  @@map("plant_ai_proposal_evidence")
 }
 
 model ResearchJob {

@@ -10,6 +10,7 @@ import { appConfig, databaseConfig } from '../src/config/app.config.js';
 import { AuthModule } from '../src/auth/auth.module.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 import { PlantsModule } from '../src/plants/plants.module.js';
+import { configChecksum } from '../src/plants/plant-config.js';
 import { AllExceptionsFilter } from '../src/common/filters/http-exception.filter.js';
 
 const PREFLIGHT = 'greenhouse-plants-test-pg-1023:16.15:tmpfs';
@@ -233,11 +234,11 @@ describe('Plants API HTTP integration (isolated PostgreSQL)', () => {
   it('blocks cross-tenant profile, stage, assignment, override, effective-config, and audit access', async () => {
     await request(app.getHttpServer()).get(`/api/organizations/${ids.orgB}/plant-profiles`).set(auth('ownerA')).expect(403);
     await request(app.getHttpServer()).get(`/api/organizations/${ids.orgA}/plant-profiles/${ids.profileB}`).set(auth('ownerA')).expect(404);
-    await request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/plant-profile-versions/${ids.validVersionB}/draft`).set(auth('ownerA')).send({ profileConfig: { temperature: 30 } }).expect(404);
-    await request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/growth-stages/${ids.validStageB}`).set(auth('ownerA')).send({ label: 'Changed' }).expect(404);
+    await request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/plant-profile-versions/${ids.validVersionB}/draft`).set(auth('ownerA')).send({ expectedRevision: 1, profileConfig: { temperature: 30 } }).expect(404);
+    await request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/growth-stages/${ids.validStageB}`).set(auth('ownerA')).send({ expectedRevision: 1, label: 'Changed' }).expect(404);
     await request(app.getHttpServer()).post(`/api/plant-assignments/${ids.assignmentB}/overrides`).set(auth('ownerA')).send({ overrideConfig: { temperature: 30 } }).expect(403);
     await request(app.getHttpServer()).get(`/api/plant-assignments/${ids.assignmentB}/effective-config`).set(auth('ownerA')).expect(403);
-    await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-assignments/${ids.assignmentB}/deactivate`).set(auth('ownerA')).expect(404);
+    await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-assignments/${ids.assignmentB}/deactivate`).set(auth('ownerA')).set('Idempotency-Key', `foreign-deactivate-${runId}`).expect(404);
     await request(app.getHttpServer()).get(`/api/organizations/${ids.orgB}/plant-config-audit`).set(auth('ownerA')).expect(403);
     expect((await prisma.zonePlantAssignment.findUnique({ where: { id: ids.assignmentB } }))?.status).toBe('ACTIVE');
     expect(await prisma.zoneParameterOverride.count({ where: { assignmentId: ids.assignmentB } })).toBe(1);
@@ -274,33 +275,128 @@ describe('Plants API HTTP integration (isolated PostgreSQL)', () => {
   });
 
   it('protects validated profile versions and published catalog versions from draft edits', async () => {
-    await request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/plant-profile-versions/${ids.validVersionA}/draft`).set(auth('ownerA')).send({ profileConfig: { temperature: 30 } }).expect(409);
+    await request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/plant-profile-versions/${ids.validVersionA}/draft`).set(auth('ownerA')).send({ expectedRevision: 1, profileConfig: { temperature: 30 } }).expect(409);
     await request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/plant-catalog/versions/${ids.catalogVersion}/draft`).set(auth('ownerA')).send({ profileDefaults: { temperature: 30 } }).expect(409);
     const definition = await prisma.plantParameterDefinition.findFirst({ where: { plantCatalogVersionId: ids.catalogVersion } });
     if (definition) await request(app.getHttpServer()).delete(`/api/organizations/${ids.orgA}/plant-catalog/versions/${ids.catalogVersion}/parameters/${definition.id}`).set(auth('ownerA')).expect(409);
   });
 
   it('validates draft configuration, rejects invalid activation, and persists valid activation/override/audit changes', async () => {
-    await request(app.getHttpServer()).post(`/api/zones/${ids.zoneA}/plant-assignments`).set(auth('ownerA')).send({ organizationId: ids.orgA, plantProfileVersionId: ids.draftVersionA, growthStageId: ids.draftStageA }).expect(422);
-    await request(app.getHttpServer()).post(`/api/zones/${ids.zoneB}/plant-assignments`).set(auth('ownerA')).send({ organizationId: ids.orgA, plantProfileVersionId: ids.validVersionA, growthStageId: ids.validStageA }).expect(404);
-    await request(app.getHttpServer()).post(`/api/zones/${ids.zoneA}/plant-assignments`).set(auth('ownerA')).send({ organizationId: ids.orgA, plantProfileVersionId: ids.validVersionA, growthStageId: ids.validStageB }).expect(422);
+    await request(app.getHttpServer()).post(`/api/zones/${ids.zoneA}/plant-assignments`).set(auth('ownerA')).set('Idempotency-Key', `activate-draft-${runId}`).send({ organizationId: ids.orgA, plantProfileVersionId: ids.draftVersionA, growthStageId: ids.draftStageA }).expect(422);
+    await request(app.getHttpServer()).post(`/api/zones/${ids.zoneB}/plant-assignments`).set(auth('ownerA')).set('Idempotency-Key', `activate-foreign-zone-${runId}`).send({ organizationId: ids.orgA, plantProfileVersionId: ids.validVersionA, growthStageId: ids.validStageA }).expect(404);
+    await request(app.getHttpServer()).post(`/api/zones/${ids.zoneA}/plant-assignments`).set(auth('ownerA')).set('Idempotency-Key', `activate-wrong-stage-${runId}`).send({ organizationId: ids.orgA, plantProfileVersionId: ids.validVersionA, growthStageId: ids.validStageB }).expect(422);
 
     const invalidDraft = await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-profiles`).set(auth('ownerA')).send({
       catalogVersionId: ids.catalogVersion, code: `invalid-${runId}`, name: 'Invalid config', profileConfig: { temperature: 200 },
       stages: [{ code: 'stage', label: 'Stage', sequence: 1, config: { temperature: 22 } }],
     }).expect(201);
     const invalidVersion = invalidDraft.body.versions[0];
-    await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-profile-versions/${invalidVersion.id}/validate`).set(auth('ownerA')).expect(422);
+    await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-profile-versions/${invalidVersion.id}/validate`).set(auth('ownerA')).send({ expectedRevision: 1 }).expect(422);
     expect((await prisma.plantProfileVersion.findUnique({ where: { id: invalidVersion.id } }))?.status).toBe('DRAFT');
 
-    const activated = await request(app.getHttpServer()).post(`/api/zones/${ids.zoneA}/plant-assignments`).set(auth('ownerA')).send({ organizationId: ids.orgA, plantProfileVersionId: ids.validVersionA, growthStageId: ids.validStageA }).expect(201);
+    const activate = (stageId = ids.validStageA) => request(app.getHttpServer()).post(`/api/zones/${ids.zoneA}/plant-assignments`).set(auth('ownerA')).set('Idempotency-Key', `activate-valid-${runId}`).send({ organizationId: ids.orgA, plantProfileVersionId: ids.validVersionA, growthStageId: stageId });
+    const requestBody = { organizationId: ids.orgA, plantProfileVersionId: ids.validVersionA, growthStageId: ids.validStageA };
+    await request(app.getHttpServer()).post(`/api/zones/${ids.zoneA}/plant-assignments`).set(auth('ownerA')).send(requestBody).expect(400);
+    const concurrentActivations = await Promise.all([activate(), activate()]);
+    expect(concurrentActivations.map((result) => result.status)).toEqual([201, 201]);
+    expect(concurrentActivations[0].body.id).toBe(concurrentActivations[1].body.id);
+    const activated = concurrentActivations[0];
+    const activationAuditCount = await prisma.plantConfigAuditEvent.count({ where: { organizationId: ids.orgA, action: 'ZONE_PLANT_ACTIVATED', entityId: activated.body.id } });
+    const replayedActivation = await activate().expect(201);
+    expect(replayedActivation.body.id).toBe(activated.body.id);
+    expect(await prisma.plantConfigAuditEvent.count({ where: { organizationId: ids.orgA, action: 'ZONE_PLANT_ACTIVATED', entityId: activated.body.id } })).toBe(activationAuditCount);
+    await activate(ids.validStageB).expect(409);
     expect((await prisma.zonePlantAssignment.findUnique({ where: { id: activated.body.id } }))?.status).toBe('ACTIVE');
     await request(app.getHttpServer()).post(`/api/plant-assignments/${activated.body.id}/overrides`).set(auth('ownerA')).send({ overrideConfig: { temperature: -1 } }).expect(422);
     const override = await request(app.getHttpServer()).post(`/api/plant-assignments/${activated.body.id}/overrides`).set(auth('ownerA')).send({ overrideConfig: { temperature: 30 } }).expect(201);
     expect(await prisma.zoneParameterOverride.findUnique({ where: { id: override.body.id } })).toMatchObject({ revision: 1, supersededAt: null });
-    await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-assignments/${activated.body.id}/deactivate`).set(auth('ownerA')).expect(201);
+    const deactivate = () => request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-assignments/${activated.body.id}/deactivate`).set(auth('ownerA')).set('Idempotency-Key', `deactivate-valid-${runId}`);
+    const deactivated = await deactivate().expect(201);
+    const deactivationAuditCount = await prisma.plantConfigAuditEvent.count({ where: { organizationId: ids.orgA, action: 'ZONE_PLANT_DEACTIVATED', entityId: activated.body.id } });
+    expect((await deactivate().expect(201)).body).toEqual(deactivated.body);
+    expect(await prisma.plantConfigAuditEvent.count({ where: { organizationId: ids.orgA, action: 'ZONE_PLANT_DEACTIVATED', entityId: activated.body.id } })).toBe(deactivationAuditCount);
     expect((await prisma.zonePlantAssignment.findUnique({ where: { id: activated.body.id } }))?.status).toBe('ENDED');
     expect(await prisma.plantConfigAuditEvent.count({ where: { organizationId: ids.orgA, entityId: activated.body.id } })).toBeGreaterThanOrEqual(2);
+  });
+
+  it('serializes draft edits, validation, and concurrent profile version creation', async () => {
+    const created = await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-profiles`).set(auth('ownerA')).send({
+      catalogVersionId: ids.catalogVersion,
+      code: `concurrency-${runId}`,
+      name: 'Concurrency profile',
+      profileConfig: { temperature: 22 },
+      stages: [{ code: 'stage', label: 'Stage', sequence: 1, config: { temperature: 23 } }],
+    }).expect(201);
+    const profileId = created.body.id as string;
+    const draft = created.body.versions[0];
+    const secondStage = await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-profile-versions/${draft.id}/stages`).set(auth('ownerA')).send({
+      expectedRevision: 1,
+      code: 'second',
+      label: 'Second stage',
+      sequence: 2,
+      config: { temperature: 24 },
+    }).expect(201);
+
+    const editResults = await Promise.all([
+      request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/plant-profile-versions/${draft.id}/draft`).set(auth('ownerA')).send({ expectedRevision: 2, profileConfig: { temperature: 24 } }),
+      request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/plant-profile-versions/${draft.id}/draft`).set(auth('ownerA')).send({ expectedRevision: 2, profileConfig: { temperature: 25 } }),
+    ]);
+    expect(editResults.map((result) => result.status).sort()).toEqual([200, 409]);
+    const staleResult = editResults.find((result) => result.status === 409);
+    expect(staleResult?.body).toMatchObject({
+      statusCode: 409,
+      message: { code: 'STALE_DRAFT_REVISION', expectedRevision: 2, currentRevision: 3 },
+    });
+    let current = await prisma.plantProfileVersion.findUnique({ where: { id: draft.id } });
+    expect(current).toMatchObject({ draftRevision: 3, status: 'DRAFT' });
+    expect(await prisma.plantConfigAuditEvent.count({ where: { entityId: draft.id, action: 'PLANT_PROFILE_DRAFT_EDITED' } })).toBe(1);
+
+    const stageResults = await Promise.all([
+      request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/growth-stages/${secondStage.body.id}`).set(auth('ownerA')).send({ expectedRevision: 3, label: 'Second A' }),
+      request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/growth-stages/${secondStage.body.id}`).set(auth('ownerA')).send({ expectedRevision: 3, label: 'Second B' }),
+    ]);
+    expect(stageResults.map((result) => result.status).sort()).toEqual([200, 409]);
+    current = await prisma.plantProfileVersion.findUnique({ where: { id: draft.id } });
+    expect(current).toMatchObject({ draftRevision: 4, status: 'DRAFT' });
+    expect(await prisma.plantConfigAuditEvent.count({ where: { entityId: secondStage.body.id, action: 'GROWTH_STAGE_EDITED' } })).toBe(1);
+
+    const sealRace = await Promise.all([
+      request(app.getHttpServer()).patch(`/api/organizations/${ids.orgA}/plant-profile-versions/${draft.id}/draft`).set(auth('ownerA')).send({ expectedRevision: 4, profileConfig: { temperature: 26 } }),
+      request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-profile-versions/${draft.id}/validate`).set(auth('ownerA')).send({ expectedRevision: 4 }),
+    ]);
+    expect(sealRace.map((result) => result.status).sort()).toEqual([200, 409]);
+    current = await prisma.plantProfileVersion.findUnique({ where: { id: draft.id } });
+    if (current?.status === 'DRAFT') {
+      expect(current.draftRevision).toBe(5);
+      await request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-profile-versions/${draft.id}/validate`).set(auth('ownerA')).send({ expectedRevision: 5 }).expect(201);
+    }
+
+    const sealed = await prisma.plantProfileVersion.findUnique({
+      where: { id: draft.id },
+      include: { sourceCatalogVersion: true, growthStages: { orderBy: { sequence: 'asc' }, include: { parameterConfig: true } } },
+    });
+    expect(sealed?.status).toBe('VALIDATED');
+    expect(sealed?.checksum).toBe(configChecksum({
+      sourceCatalogChecksum: sealed?.sourceCatalogVersion.checksum,
+      configSchemaVersion: sealed?.configSchemaVersion,
+      draftRevision: sealed?.draftRevision,
+      profileConfig: sealed?.profileConfig,
+      stages: sealed?.growthStages.map((stage) => ({
+        code: stage.code,
+        sequence: stage.sequence,
+        minDurationDays: stage.minDurationDays,
+        maxDurationDays: stage.maxDurationDays,
+        transitionCriteria: stage.transitionCriteria,
+        config: stage.parameterConfig?.config ?? {},
+      })),
+    }));
+
+    const versionCreates = await Promise.all([
+      request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-profiles/${profileId}/versions`).set(auth('ownerA')),
+      request(app.getHttpServer()).post(`/api/organizations/${ids.orgA}/plant-profiles/${profileId}/adoptions`).set(auth('ownerA')).send({ catalogVersionId: ids.catalogVersion }),
+    ]);
+    expect(versionCreates.map((result) => result.status).sort()).toEqual([201, 409]);
+    expect(await prisma.plantProfileVersion.count({ where: { plantProfileId: profileId, status: 'DRAFT' } })).toBe(1);
   });
 });
 

@@ -1,4 +1,4 @@
-import { IsArray, IsInt, IsObject, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsObject, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreatePlantCatalogDto {
@@ -12,20 +12,28 @@ export class CreateCatalogVersionDto {
   @IsObject() profileDefaults!: Record<string, unknown>;
   @IsOptional() @IsArray() stageTemplates?: unknown[];
   @IsOptional() @IsObject() edgeCompatibility?: Record<string, unknown>;
+  @IsOptional() @IsIn(['AI_PLANT_SETUP', 'MANUAL_EDIT']) changeOrigin?: 'AI_PLANT_SETUP' | 'MANUAL_EDIT';
 }
 
 export class UpdateCatalogVersionDto {
   @IsOptional() @IsObject() profileDefaults?: Record<string, unknown>;
   @IsOptional() @IsArray() stageTemplates?: unknown[];
   @IsOptional() @IsObject() edgeCompatibility?: Record<string, unknown>;
+  @IsOptional() @IsIn(['AI_PLANT_SETUP', 'MANUAL_EDIT']) changeOrigin?: 'AI_PLANT_SETUP' | 'MANUAL_EDIT';
 }
 
 export class UpdateProfileDraftDto {
+  @IsInt() @Min(1) expectedRevision!: number;
   @IsOptional() @IsString() name?: string;
   @IsOptional() @IsObject() profileConfig?: Record<string, unknown>;
 }
 
+export class ValidateProfileVersionDto {
+  @IsInt() @Min(1) expectedRevision!: number;
+}
+
 export class UpdateGrowthStageDto {
+  @IsInt() @Min(1) expectedRevision!: number;
   @IsOptional() @IsString() code?: string;
   @IsOptional() @IsString() label?: string;
   @IsOptional() @IsInt() @Min(1) sequence?: number;
@@ -42,6 +50,7 @@ export class CreateParameterDefinitionDto {
   @IsOptional() @IsString() @MaxLength(64) unit?: string;
   @IsObject() valueSchema!: Record<string, unknown>;
   @IsOptional() @IsObject() metadataSchema?: Record<string, unknown>;
+  @IsOptional() @IsIn(['AI_PLANT_SETUP', 'MANUAL_EDIT']) changeOrigin?: 'AI_PLANT_SETUP' | 'MANUAL_EDIT';
 }
 
 export class UpdateParameterDefinitionDto {
@@ -51,6 +60,7 @@ export class UpdateParameterDefinitionDto {
   @IsOptional() @IsString() @MaxLength(64) unit?: string | null;
   @IsOptional() @IsObject() valueSchema?: Record<string, unknown>;
   @IsOptional() @IsObject() metadataSchema?: Record<string, unknown>;
+  @IsOptional() @IsIn(['AI_PLANT_SETUP', 'MANUAL_EDIT']) changeOrigin?: 'AI_PLANT_SETUP' | 'MANUAL_EDIT';
 }
 
 export class CreateGrowthStageDto {
@@ -61,6 +71,10 @@ export class CreateGrowthStageDto {
   @IsOptional() @IsInt() @Min(0) maxDurationDays?: number;
   @IsOptional() @IsObject() transitionCriteria?: Record<string, unknown>;
   @IsOptional() @IsObject() config?: Record<string, unknown>;
+}
+
+export class CreateDraftGrowthStageDto extends CreateGrowthStageDto {
+  @IsInt() @Min(1) expectedRevision!: number;
 }
 
 export class CreatePlantProfileDto {

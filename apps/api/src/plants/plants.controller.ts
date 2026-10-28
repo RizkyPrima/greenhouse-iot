@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiHeader, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { PlatformAdminGuard } from './platform-admin.guard.js';
@@ -15,16 +15,116 @@ import {
   UpdateCatalogVersionDto,
   UpdateProfileDraftDto,
   UpdateGrowthStageDto,
-  CreateGrowthStageDto,
+  CreateDraftGrowthStageDto,
+  ValidateProfileVersionDto,
   UpdateParameterDefinitionDto,
 } from './dto/plant.dto.js';
 import { PlantsService } from './plants.service.js';
+import { PlantEvidenceService, PlantProposalsService } from './plant-evidence.service.js';
+import { CreatePlantEvidenceDto, CreatePlantProposalDto, ReviewPlantEvidenceDto, ReviewPlantProposalDto } from './plant-evidence.dto.js';
+import { CreatePlantRecommendationDto } from './plant-ai-recommendation.dto.js';
+import { PlantAiRecommendationService } from './plant-ai-recommendation.service.js';
+import { GeneratePlantSetupDto } from './plant-setup.dto.js';
+import { PlantSetupService } from './plant-setup.service.js';
+import { DevicePlantConfigurationService } from './device-plant-configuration.service.js';
+import { ApplyDevicePlantConfigurationDto } from './device-plant-configuration.dto.js';
 
 @ApiTags('Plant Standardization')
 @ApiBearerAuth()
 @Controller()
 export class PlantsController {
-  constructor(private readonly plants: PlantsService) {}
+  constructor(
+    private readonly plants: PlantsService,
+    private readonly evidence: PlantEvidenceService,
+    private readonly proposals: PlantProposalsService,
+    private readonly recommendations: PlantAiRecommendationService,
+    private readonly plantSetup: PlantSetupService,
+    private readonly deviceConfigurations: DevicePlantConfigurationService,
+  ) {}
+
+  @Post('organizations/:organizationId/plant-setups/generate')
+  generatePlantSetup(@Param('organizationId') organizationId: string, @Body() dto: GeneratePlantSetupDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.plantSetup.generate(organizationId, dto, user);
+  }
+
+  @Get('organizations/:organizationId/plant-config-devices')
+  listPlantConfigurationDevices(@Param('organizationId') organizationId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.deviceConfigurations.listDevices(organizationId, user);
+  }
+
+  @Post('organizations/:organizationId/devices/:deviceId/plant-configurations')
+  applyDevicePlantConfiguration(
+    @Param('organizationId') organizationId: string,
+    @Param('deviceId') deviceId: string,
+    @Body() dto: ApplyDevicePlantConfigurationDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.deviceConfigurations.apply(organizationId, deviceId, dto, user);
+  }
+
+  @Get('organizations/:organizationId/device-plant-configurations/:configurationId')
+  getDevicePlantConfiguration(
+    @Param('organizationId') organizationId: string,
+    @Param('configurationId') configurationId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.deviceConfigurations.getDelivery(organizationId, configurationId, user);
+  }
+
+  @Post('organizations/:organizationId/scientific-evidence')
+  createOrganizationEvidence(@Param('organizationId') organizationId: string, @Body() dto: CreatePlantEvidenceDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.evidence.createOrganizationEvidence(organizationId, dto.contract, user);
+  }
+
+  @Get('organizations/:organizationId/scientific-evidence')
+  listOrganizationEvidence(@Param('organizationId') organizationId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.evidence.listOrganizationEvidence(organizationId, user);
+  }
+
+  @Post('platform/scientific-evidence')
+  createGlobalEvidence(@Body() dto: CreatePlantEvidenceDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.evidence.createGlobalEvidence(dto.contract, user);
+  }
+
+  @Get('scientific-evidence/:evidenceId')
+  getEvidence(@Param('evidenceId') evidenceId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.evidence.getEvidence(evidenceId, user);
+  }
+
+  @Post('scientific-evidence/:evidenceId/verify')
+  verifyEvidence(@Param('evidenceId') evidenceId: string, @Body() dto: ReviewPlantEvidenceDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.evidence.verifyEvidence(evidenceId, dto.reason, user);
+  }
+
+  @Post('organizations/:organizationId/plant-ai-proposals')
+  createProposal(@Param('organizationId') organizationId: string, @Body() dto: CreatePlantProposalDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.proposals.create(organizationId, dto.contract, user);
+  }
+
+  @Get('organizations/:organizationId/plant-ai-proposals')
+  listProposals(@Param('organizationId') organizationId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.proposals.list(organizationId, user);
+  }
+
+  @Get('organizations/:organizationId/plant-ai-proposals/:proposalId')
+  getProposal(@Param('organizationId') organizationId: string, @Param('proposalId') proposalId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.proposals.get(organizationId, proposalId, user);
+  }
+
+  @Post('organizations/:organizationId/plant-ai-proposals/:proposalId/approve')
+  approveProposal(@Param('organizationId') organizationId: string, @Param('proposalId') proposalId: string, @Body() dto: ReviewPlantProposalDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.proposals.decide(organizationId, proposalId, true, dto.reason, user);
+  }
+
+  @Post('organizations/:organizationId/plant-ai-proposals/:proposalId/reject')
+  rejectProposal(@Param('organizationId') organizationId: string, @Param('proposalId') proposalId: string, @Body() dto: ReviewPlantProposalDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.proposals.decide(organizationId, proposalId, false, dto.reason, user);
+  }
+
+  @Post('organizations/:organizationId/plant-ai-proposals/:proposalId/apply')
+  applyProposal(@Param('organizationId') organizationId: string, @Param('proposalId') proposalId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.proposals.applyToDraft(organizationId, proposalId, user);
+  }
 
   @Get('organizations/:organizationId/plant-catalog')
   listOrganizationCatalog(@Param('organizationId') organizationId: string, @CurrentUser() user: AuthenticatedUser) {
@@ -85,6 +185,12 @@ export class PlantsController {
     return this.plants.revokePlatformGrant(grantId, user);
   }
 
+  @Get('platform-admin-grants')
+  @UseGuards(PlatformAdminGuard)
+  listPlatformGrants() {
+    return this.plants.listPlatformGrants();
+  }
+
   @Get('organizations/:organizationId/plant-profiles')
   listProfiles(@Param('organizationId') organizationId: string, @CurrentUser() user: AuthenticatedUser) {
     return this.plants.listProfiles(organizationId, user);
@@ -100,6 +206,16 @@ export class PlantsController {
     return this.plants.createProfile(organizationId, dto, user);
   }
 
+  @Post('organizations/:organizationId/plant-profiles/:profileId/recommendations')
+  createRecommendation(
+    @Param('organizationId') organizationId: string,
+    @Param('profileId') profileId: string,
+    @Body() dto: CreatePlantRecommendationDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.recommendations.recommend(organizationId, profileId, dto.profileVersionId, dto.growthStageId, user);
+  }
+
   @Post('organizations/:organizationId/plant-profiles/:profileId/versions')
   createProfileVersion(@Param('organizationId') organizationId: string, @Param('profileId') profileId: string, @CurrentUser() user: AuthenticatedUser) {
     return this.plants.createProfileVersion(organizationId, profileId, user);
@@ -111,7 +227,7 @@ export class PlantsController {
   }
 
   @Post('organizations/:organizationId/plant-profile-versions/:versionId/stages')
-  createGrowthStage(@Param('organizationId') organizationId: string, @Param('versionId') versionId: string, @Body() dto: CreateGrowthStageDto, @CurrentUser() user: AuthenticatedUser) {
+  createGrowthStage(@Param('organizationId') organizationId: string, @Param('versionId') versionId: string, @Body() dto: CreateDraftGrowthStageDto, @CurrentUser() user: AuthenticatedUser) {
     return this.plants.createGrowthStage(organizationId, versionId, dto, user);
   }
 
@@ -131,8 +247,8 @@ export class PlantsController {
   }
 
   @Post('organizations/:organizationId/plant-profile-versions/:versionId/validate')
-  validateProfileVersion(@Param('organizationId') organizationId: string, @Param('versionId') id: string, @CurrentUser() user: AuthenticatedUser) {
-    return this.plants.validateProfileVersion(organizationId, id, user);
+  validateProfileVersion(@Param('organizationId') organizationId: string, @Param('versionId') id: string, @Body() dto: ValidateProfileVersionDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.validateProfileVersion(organizationId, id, dto.expectedRevision, user);
   }
 
   @Get('organizations/:organizationId/plant-config-audit')
@@ -146,8 +262,14 @@ export class PlantsController {
   }
 
   @Post('zones/:zoneId/plant-assignments')
-  activateZone(@Param('zoneId') zoneId: string, @Body() dto: ActivatePlantProfileDto, @CurrentUser() user: AuthenticatedUser) {
-    return this.plants.activateZone(zoneId, dto, user);
+  @ApiHeader({ name: 'Idempotency-Key', required: true, description: 'Opaque request key retained for safe replay' })
+  activateZone(
+    @Param('zoneId') zoneId: string,
+    @Body() dto: ActivatePlantProfileDto,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.plants.activateZone(zoneId, dto, idempotencyKey, user);
   }
 
   @Post('plant-assignments/:assignmentId/overrides')
@@ -156,8 +278,14 @@ export class PlantsController {
   }
 
   @Post('organizations/:organizationId/plant-assignments/:assignmentId/deactivate')
-  deactivateZone(@Param('organizationId') organizationId: string, @Param('assignmentId') id: string, @CurrentUser() user: AuthenticatedUser) {
-    return this.plants.revokeAssignment(id, organizationId, user);
+  @ApiHeader({ name: 'Idempotency-Key', required: true, description: 'Opaque request key retained for safe replay' })
+  deactivateZone(
+    @Param('organizationId') organizationId: string,
+    @Param('assignmentId') id: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.plants.revokeAssignment(id, organizationId, idempotencyKey, user);
   }
 
   @Get('plant-assignments/:assignmentId/effective-config')

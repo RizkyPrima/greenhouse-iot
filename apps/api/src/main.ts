@@ -68,6 +68,7 @@ async function bootstrap(): Promise<void> {
 }
 
 bootstrap().catch((err) => {
+  Logger.flush();
   const logger = new Logger('Bootstrap');
   logger.error(`Application failed to start: ${err.message}`, err.stack);
   process.exit(1);

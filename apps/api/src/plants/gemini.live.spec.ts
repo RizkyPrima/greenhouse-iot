@@ -2,9 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { OpenAiCompatibleRecommendationProvider } from './openai-compatible-recommendation.provider.js';
 
 const liveEnabled = process.env.LLM_LIVE_TEST === 'true'
-  && Boolean(process.env.LLM_API_BASE_URL?.trim())
-  && Boolean(process.env.LLM_API_KEY?.trim())
-  && Boolean(process.env.LLM_MODEL?.trim());
+  && Boolean((process.env.GEMINI_API_KEY || process.env.LLM_API_KEY)?.trim());
 
 describe.skipIf(!liveEnabled)('Gemini live integration (opt-in)', () => {
   it('returns a schema-conforming JSON response from the configured Gemini model', async () => {

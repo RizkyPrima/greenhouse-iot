@@ -36,8 +36,8 @@ const char* WIFI_SSID     = "NAMA_WIFI_ANDA";
 const char* WIFI_PASSWORD = "PASSWORD_WIFI_ANDA";
 
 // IP Komputer / Server yang menjalankan EMQX broker
-// PC IP LAN Anda: 192.168.1.169 (pastikan port 1883 tidak diblokir Windows Firewall)
-const char* MQTT_BROKER   = "192.168.1.169";
+// IP LAN komputer yang menjalankan EMQX; gunakan DHCP reservation agar alamat tidak berubah.
+const char* MQTT_BROKER   = "192.168.1.170";
 const int   MQTT_PORT     = 1883;
 const char* MQTT_USER     = "";  // Kosongkan jika broker tanpa auth
 const char* MQTT_PASS     = "";  // Kosongkan jika broker tanpa auth
@@ -48,7 +48,7 @@ const char* MQTT_PASS     = "";  // Kosongkan jika broker tanpa auth
 // Sesuai dengan data di platform web (bisa kode "GH-MAIN-01" atau ID cuid)
 const char* GREENHOUSE_ID = "GH-MAIN-01";
 const char* DEVICE_ID     = "ESP32-S3-01";
-const char* FIRMWARE_VER  = "1.0.0-esp32s3";
+const char* FIRMWARE_VER  = "1.1.0-esp32s3";
 
 // MQTT Topics (dibuat secara dinamis di setup)
 char TOPIC_TELEMETRY[80];
@@ -485,7 +485,7 @@ void publishStatus(const char* statusStr) {
   doc["ts"]        = getEpochTimeMs();
   JsonObject capabilities = doc.createNestedObject("capabilities");
   capabilities["plantConfiguration"] = "plant-monitoring/v1";
-  capabilities["sensorDataMode"] = "SIMULATED";
+  capabilities["sensorDataMode"] = USE_PHYSICAL_SENSORS ? "PHYSICAL" : "SIMULATED";
   JsonArray sensorCodes = capabilities.createNestedArray("sensorCodes");
   for (uint8_t i = 0; i < MAX_MONITORING_SENSOR_CODES; i++) {
     sensorCodes.add(MONITORING_SENSOR_CODES[i]);
@@ -497,8 +497,8 @@ void publishStatus(const char* statusStr) {
   // Retain = false untuk status periodik
   bool ok = mqttClient.publish(TOPIC_STATUS, buffer, false);
   if (ok) {
-    Serial.printf("[STATUS] Published -> %s (Heap: %u B, RSSI: %d dBm)\n", 
-                  statusStr, ESP.getFreeHeap(), WiFi.RSSI());
+    Serial.printf("[STATUS] Published -> %s firmware=%s plantConfiguration=plant-monitoring/v1 (Heap: %u B, RSSI: %d dBm)\n",
+                  statusStr, FIRMWARE_VER, ESP.getFreeHeap(), WiFi.RSSI());
   } else {
     Serial.println("[STATUS ERROR] Failed to publish status");
   }

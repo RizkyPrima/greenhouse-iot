@@ -6,6 +6,22 @@ import { PlantSetupService } from './plant-setup.service.js';
 const actor = { id: 'owner-a' } as AuthenticatedUser;
 const validOutput = {
   scientificNameSuggestion: 'Solanum lycopersicum',
+  parameterRecommendations: [
+    'nutrient_solution_ph',
+    'tds',
+    'water_temperature',
+    'air_temperature',
+    'relative_humidity',
+    'light_intensity',
+    'co2_level',
+  ].map((parameterKey) => ({
+    parameterKey,
+    recommendedValue: 5,
+    minimumValue: 4,
+    maximumValue: 6,
+    unit: parameterKey === 'light_intensity' ? 'lux' : 'unit',
+    note: 'Kandidat awal, belum diverifikasi.',
+  })),
   additionalParameters: [{ parameterKey: 'co2_level', label: 'CO2' }],
   growthStages: [
     { code: 'fruiting', label: 'Berbuah', sequence: 2 },
@@ -20,7 +36,12 @@ function harness(configured = true) {
     getName: vi.fn().mockReturnValue('Google Gemini API'),
     getModel: vi.fn().mockReturnValue('configured-text-model'),
     generateJson: vi.fn().mockResolvedValue(validOutput),
+    generateJsonWithMetadata: vi.fn(),
   };
+  provider.generateJsonWithMetadata.mockImplementation(async (input, schema) => ({
+    output: await provider.generateJson(input, schema),
+    provider: { name: 'Google Gemini API', model: 'configured-text-model' },
+  }));
   return {
     authorization,
     provider,
@@ -29,7 +50,7 @@ function harness(configured = true) {
 }
 
 describe('PlantSetupService', () => {
-  it('returns only parameter and stage candidates, without agronomic values or evidence claims', async () => {
+  it('returns provisional parameter values and real-source candidates without evidence claims', async () => {
     const h = harness();
     const result = await h.service.generate('org-a', {
       commonName: 'Tomat',
@@ -43,19 +64,22 @@ describe('PlantSetupService', () => {
       priorityParameters: expect.arrayContaining([expect.objectContaining({ parameterKey: 'nutrient_solution_ph' })]),
     });
     expect(result.status).toBe('CANDIDATES_FOR_REVIEW');
-    expect(result.parameters.slice(0, 5).map((parameter) => parameter.parameterKey)).toEqual([
+    expect(result.provider).toEqual({ name: 'Google Gemini API', model: 'configured-text-model' });
+    expect(result.parameters.slice(0, 6).map((parameter) => parameter.parameterKey)).toEqual([
       'nutrient_solution_ph',
       'tds',
       'water_temperature',
       'air_temperature',
       'relative_humidity',
+      'light_intensity',
     ]);
     expect(result.parameters).toEqual(expect.arrayContaining([
-      expect.objectContaining({ parameterKey: 'nutrient_solution_ph', unit: null, evidenceStatus: 'NOT_ASSESSED' }),
-      expect.objectContaining({ parameterKey: 'co2_level', unit: null, evidenceStatus: 'NOT_ASSESSED' }),
+      expect.objectContaining({ parameterKey: 'nutrient_solution_ph', recommendedValue: 5, minimumValue: 4, maximumValue: 6, evidenceStatus: 'NOT_ASSESSED' }),
+      expect.objectContaining({ parameterKey: 'light_intensity', label: 'Intensitas cahaya', unit: 'lux', recommendedValue: 5, evidenceStatus: 'NOT_ASSESSED' }),
+      expect.objectContaining({ parameterKey: 'co2_level', recommendedValue: 5, evidenceStatus: 'NOT_ASSESSED' }),
     ]));
     expect(result.growthStages.map((stage) => stage.sequence)).toEqual([1, 2]);
-    expect(JSON.stringify(result)).not.toMatch(/recommendedValue|minimum|maximum|canonicalUrl|VERIFIED/);
+    expect(JSON.stringify(result)).not.toMatch(/canonicalUrl|VERIFIED/);
   });
 
   it('fails with a structured error when Gemini is not configured', async () => {
@@ -94,4 +118,41 @@ describe('PlantSetupService', () => {
     await expect(h.service.generate('org-a', { commonName: 'Tomat', cultivationMethod: 'hydroponic_tower' }, actor))
       .rejects.toBeInstanceOf(BadGatewayException);
   });
+
+  it('rejects inverted ranges', async () => {
+    const h = harness();
+    h.provider.generateJson.mockResolvedValue({
+      ...validOutput,
+      parameterRecommendations: validOutput.parameterRecommendations.map((item, index) => index === 0
+        ? { ...item, minimumValue: 8, maximumValue: 4 }
+        : item),
+    });
+    await expect(h.service.generate('org-a', { commonName: 'Tomat', cultivationMethod: 'hydroponic_tower' }, actor))
+      .rejects.toBeInstanceOf(BadGatewayException);
+  });
+
+  it('rejects an AI-suggested light unit that does not match the firmware light telemetry', async () => {
+    const h = harness();
+    h.provider.generateJson.mockResolvedValue({
+      ...validOutput,
+      parameterRecommendations: validOutput.parameterRecommendations.map((item) => item.parameterKey === 'light_intensity'
+        ? { ...item, unit: 'W/m2' }
+        : item),
+    });
+    await expect(h.service.generate('org-a', { commonName: 'Tomat', cultivationMethod: 'hydroponic_tower' }, actor))
+      .rejects.toBeInstanceOf(BadGatewayException);
+  });
+
+  it('rejects provisional values outside the AI-suggested range', async () => {
+    const h = harness();
+    h.provider.generateJson.mockResolvedValue({
+      ...validOutput,
+      parameterRecommendations: validOutput.parameterRecommendations.map((item, index) => index === 0
+        ? { ...item, recommendedValue: 7 }
+        : item),
+    });
+    await expect(h.service.generate('org-a', { commonName: 'Tomat', cultivationMethod: 'hydroponic_tower' }, actor))
+      .rejects.toBeInstanceOf(BadGatewayException);
+  });
+
 });

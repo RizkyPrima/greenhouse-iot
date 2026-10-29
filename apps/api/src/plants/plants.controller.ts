@@ -151,6 +151,11 @@ export class PlantsController {
     return this.plants.updateCatalogVersion(organizationId, id, dto, user);
   }
 
+  @Delete('organizations/:organizationId/plant-catalog/versions/:versionId')
+  deleteCatalogVersion(@Param('organizationId') organizationId: string, @Param('versionId') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.deleteCatalogVersion(organizationId, id, user);
+  }
+
   @Post('organizations/:organizationId/plant-catalog/versions/:versionId/parameters')
   createParameter(@Param('organizationId') organizationId: string, @Param('versionId') id: string, @Body() dto: CreateParameterDefinitionDto, @CurrentUser() user: AuthenticatedUser) {
     return this.plants.createParameterDefinition(organizationId, id, dto, user);
@@ -164,6 +169,16 @@ export class PlantsController {
   @Delete('organizations/:organizationId/plant-catalog/versions/:versionId/parameters/:parameterId')
   deleteParameter(@Param('organizationId') organizationId: string, @Param('versionId') versionId: string, @Param('parameterId') parameterId: string, @CurrentUser() user: AuthenticatedUser) {
     return this.plants.deleteParameterDefinition(organizationId, versionId, parameterId, user);
+  }
+
+  @Post('organizations/:organizationId/plant-catalog/versions/:versionId/parameters/:parameterId/validate')
+  validateCatalogParameter(@Param('organizationId') organizationId: string, @Param('versionId') versionId: string, @Param('parameterId') parameterId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.validateCatalogParameter(organizationId, versionId, parameterId, user);
+  }
+
+  @Get('organizations/:organizationId/plant-catalog/versions/:versionId/parameter-validations')
+  listCatalogParameterValidations(@Param('organizationId') organizationId: string, @Param('versionId') versionId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.plants.listCatalogParameterValidations(organizationId, versionId, user);
   }
 
   @Post('organizations/:organizationId/plant-catalog/versions/:versionId/publish')

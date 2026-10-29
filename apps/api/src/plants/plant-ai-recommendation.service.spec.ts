@@ -20,7 +20,11 @@ function harness(evidence: unknown[] = [], configuredProvider = false, parameter
   };
   const authorization = { requireRole: vi.fn().mockResolvedValue({ role: UserRole.OWNER }) };
   const proposals = { create: vi.fn().mockResolvedValue({ id: 'proposal-a' }) };
-  const provider = { isConfigured: vi.fn().mockReturnValue(configuredProvider), getName: vi.fn().mockReturnValue('test-provider'), getModel: vi.fn().mockReturnValue('test-model'), generateJson: vi.fn() };
+  const provider = { isConfigured: vi.fn().mockReturnValue(configuredProvider), getName: vi.fn().mockReturnValue('test-provider'), getModel: vi.fn().mockReturnValue('test-model'), generateJson: vi.fn(), generateJsonWithMetadata: vi.fn() };
+  provider.generateJsonWithMetadata.mockImplementation(async (input, schema) => ({
+    output: await provider.generateJson(input, schema),
+    provider: { name: 'actual-provider', model: 'actual-model' },
+  }));
   const service = new PlantAiRecommendationService(prisma as never, authorization as never, proposals as never, provider as never);
   return { service, prisma, authorization, proposals, provider };
 }
@@ -136,6 +140,7 @@ describe('PlantAiRecommendationService', () => {
     expect(result.status).toBe('PROPOSAL_CREATED');
     expect(h.proposals.create).toHaveBeenCalledOnce();
     const payload = h.proposals.create.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload.provider).toEqual({ name: 'actual-provider', model: 'actual-model' });
     expect((payload.stageTemplates as Array<{ config: Record<string, unknown> }>)[0].config.air_temperature).toBe(23);
     expect((payload.validationFindings as Array<{ code: string }>).some((finding) => finding.code === 'MISSING_APPLICABILITY')).toBe(true);
   });

@@ -25,6 +25,7 @@ import {
   configChecksum,
   mergePlantConfig,
   PLANT_CONFIG_SCHEMA_VERSION,
+  plantParameterDefinitionChecksum,
   validateCatalogConfiguration,
   validatePlantLayer,
 } from './plant-config.js';
@@ -93,6 +94,14 @@ function growthStageUniqueConflict(error: unknown): 'code' | 'sequence' | null {
   if (description.includes('code')) return 'code';
   if (description.includes('sequence')) return 'sequence';
   return null;
+}
+
+function chunk<T>(values: T[], size = 500): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    result.push(values.slice(index, index + size));
+  }
+  return result;
 }
 
 @Injectable()
@@ -202,6 +211,158 @@ export class PlantsService {
     return updated;
   }
 
+  async deleteCatalogVersion(organizationId: string, versionId: string, actor: AuthenticatedUser) {
+    await this.assertCatalogVersionOrganization(organizationId, actor, versionId, true);
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SET LOCAL app.allow_plant_cascade_delete = 'on'`;
+        const version = await tx.plantCatalogVersion.findFirst({
+          where: { id: versionId, plantCatalog: { organizationId } },
+          select: { id: true, status: true, plantCatalogId: true },
+        });
+        if (!version) throw new NotFoundException('Plant catalog version not found');
+
+        const profileVersions = await tx.plantProfileVersion.findMany({
+          where: { organizationId, plantCatalogId: version.plantCatalogId },
+          select: { id: true, plantProfileId: true, sourceCatalogVersionId: true, adoptedFromVersionId: true },
+        });
+        const profileVersionById = new Map(profileVersions.map((item) => [item.id, item]));
+        const profileVersionChildren = new Map<string, string[]>();
+        for (const profileVersion of profileVersions) {
+          if (!profileVersion.adoptedFromVersionId) continue;
+          const children = profileVersionChildren.get(profileVersion.adoptedFromVersionId) ?? [];
+          children.push(profileVersion.id);
+          profileVersionChildren.set(profileVersion.adoptedFromVersionId, children);
+        }
+
+        const profileVersionLevels: string[][] = [];
+        let level = profileVersions.filter((item) => item.sourceCatalogVersionId === versionId).map((item) => item.id);
+        const includedProfileVersionIds = new Set<string>();
+        while (level.length) {
+          level = level.filter((id) => !includedProfileVersionIds.has(id));
+          if (!level.length) break;
+          profileVersionLevels.push(level);
+          for (const id of level) includedProfileVersionIds.add(id);
+          level = level.flatMap((id) => profileVersionChildren.get(id) ?? []);
+        }
+        const profileVersionIds = [...includedProfileVersionIds];
+        const affectedProfileIds = [...new Set(profileVersionIds
+          .map((id) => profileVersionById.get(id)?.plantProfileId)
+          .filter((id): id is string => Boolean(id)))];
+        const assignments = (await Promise.all(chunk(profileVersionIds).map((ids) => tx.zonePlantAssignment.findMany({
+          where: { plantProfileVersionId: { in: ids } },
+          select: { id: true },
+        })))).flat();
+        const assignmentIds = assignments.map(({ id }) => id);
+        const assignmentIdChunks = chunk(assignmentIds, 500);
+        const ruleSets = (await Promise.all(chunk(profileVersionIds).map((ids) => tx.zoneRuleSet.findMany({
+          where: { plantProfileVersionId: { in: ids } },
+          select: { id: true },
+        })))).flat();
+        const ruleSetIds = ruleSets.map(({ id }) => id);
+        const ruleSetIdChunks = chunk(ruleSetIds, 500);
+        const decisionsByReference = await Promise.all([
+          ...chunk(profileVersionIds).map((ids) => tx.zoneDecision.findMany({
+            where: { plantProfileVersionId: { in: ids } },
+            select: { id: true },
+          })),
+          ...chunk(assignmentIds).map((ids) => tx.zoneDecision.findMany({
+            where: { assignmentId: { in: ids } },
+            select: { id: true },
+          })),
+          ...chunk(ruleSetIds).map((ids) => tx.zoneDecision.findMany({
+            where: { ruleSetId: { in: ids } },
+            select: { id: true },
+          })),
+        ]);
+        const decisionIdChunks = chunk([...new Set(decisionsByReference.flatMap((rows) => rows.map(({ id }) => id)))], 500);
+        for (const decisionIdChunk of decisionIdChunks) {
+          await tx.zoneDecisionFeedback.deleteMany({ where: { decisionId: { in: decisionIdChunk } } });
+          await tx.zoneDecision.deleteMany({ where: { id: { in: decisionIdChunk } } });
+        }
+        for (const assignmentIdChunk of assignmentIdChunks) {
+          await tx.zoneParameterOverride.deleteMany({ where: { assignmentId: { in: assignmentIdChunk } } });
+          await tx.zonePlantAssignment.deleteMany({ where: { id: { in: assignmentIdChunk } } });
+        }
+        for (const ruleSetIdChunk of ruleSetIdChunks) {
+          await tx.zoneRuleSet.deleteMany({ where: { id: { in: ruleSetIdChunk } } });
+        }
+
+        const growthStages = (await Promise.all(chunk(profileVersionIds).map((ids) => tx.growthStage.findMany({
+          where: { plantProfileVersionId: { in: ids } },
+          select: { id: true },
+        })))).flat();
+        const growthStageIdChunks = chunk(growthStages.map(({ id }) => id), 500);
+        for (const growthStageIdChunk of growthStageIdChunks) {
+          await tx.stageParameterConfig.deleteMany({ where: { growthStageId: { in: growthStageIdChunk } } });
+          await tx.growthStage.deleteMany({ where: { id: { in: growthStageIdChunk } } });
+        }
+        for (const profileVersionLevel of profileVersionLevels.reverse()) {
+          for (const profileVersionIdChunk of chunk(profileVersionLevel, 500)) {
+            await tx.plantProfileVersion.deleteMany({ where: { id: { in: profileVersionIdChunk } } });
+          }
+        }
+        if (affectedProfileIds.length) {
+          const remainingVersions = (await Promise.all(chunk(affectedProfileIds).map((ids) => tx.plantProfileVersion.findMany({
+            where: { plantProfileId: { in: ids } },
+            select: { plantProfileId: true },
+          })))).flat();
+          const profilesWithVersions = new Set(remainingVersions.map(({ plantProfileId }) => plantProfileId));
+          const emptyProfileIds = affectedProfileIds.filter((id) => !profilesWithVersions.has(id));
+          if (emptyProfileIds.length) await tx.plantProfile.deleteMany({ where: { id: { in: emptyProfileIds } } });
+        }
+        const deletedProposals = await tx.plantAiProposal.deleteMany({ where: { targetCatalogVersionId: versionId } });
+        const deletedDeviceConfigurations = await tx.devicePlantConfiguration.deleteMany({ where: { catalogVersionId: versionId } });
+        await tx.plantParameterDefinition.deleteMany({ where: { plantCatalogVersionId: versionId } });
+        const deleted = await tx.plantCatalogVersion.deleteMany({
+          where: { id: versionId, status: version.status },
+        });
+        if (deleted.count !== 1) {
+          throw new ConflictException('The standard changed while it was being deleted. Refresh and try again.');
+        }
+        await tx.plantConfigAuditEvent.create({
+          data: {
+            actorUserId: actor.id,
+            organizationId,
+            action: 'CATALOG_VERSION_CASCADE_DELETED',
+            entityType: 'PlantCatalogVersion',
+            entityId: versionId,
+            details: {
+              deletedStatus: version.status,
+              deletedProfileVersionCount: profileVersionIds.length,
+              deletedAssignmentCount: assignmentIds.length,
+              deletedProposalCount: deletedProposals.count,
+              deletedDeviceConfigurationCount: deletedDeviceConfigurations.count,
+            },
+          },
+        });
+        return {
+          id: versionId,
+          deleted: true as const,
+          deletedProfileVersionCount: profileVersionIds.length,
+          deletedAssignmentCount: assignmentIds.length,
+          deletedProposalCount: deletedProposals.count,
+          deletedDeviceConfigurationCount: deletedDeviceConfigurations.count,
+        };
+      }, { timeout: 30_000 });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && ['P2003', 'P2014'].includes(error.code)) {
+        throw new ConflictException({
+          code: 'PLANT_CASCADE_DELETE_BLOCKED',
+          message: 'A related record could not be removed safely. No data was deleted; contact an administrator.',
+          databaseCode: error.code,
+        });
+      }
+      if (error instanceof Prisma.PrismaClientUnknownRequestError && error.message.includes('P0001')) {
+        throw new ConflictException({
+          code: 'PLANT_CASCADE_MIGRATION_REQUIRED',
+          message: 'The database still blocks deletion of validated plant data. Apply migration 20261029130000_phase10_7_explicit_plant_cascade_delete, then retry. No data was deleted.',
+        });
+      }
+      throw error;
+    }
+  }
+
   async createParameterDefinition(organizationId: string, versionId: string, dto: CreateParameterDefinitionDto, actor: AuthenticatedUser) {
     await this.assertCatalogVersionOrganization(organizationId, actor, versionId, true);
     const version = await this.prisma.plantCatalogVersion.findUnique({ where: { id: versionId } });
@@ -293,6 +454,102 @@ export class PlantsService {
         data: { actorUserId: actor.id, organizationId, action: 'PARAMETER_DEFINITION_DELETED', entityType: 'PlantParameterDefinition', entityId: parameterId },
       });
       return { id: parameterId, deleted: true };
+    });
+  }
+
+  async validateCatalogParameter(organizationId: string, versionId: string, parameterId: string, actor: AuthenticatedUser) {
+    await this.assertCatalogVersionOrganization(organizationId, actor, versionId, true);
+    const version = await this.prisma.plantCatalogVersion.findFirst({
+      where: { id: versionId, plantCatalog: { organizationId } },
+      include: { parameterDefinitions: true },
+    });
+    if (!version) throw new NotFoundException('Plant catalog version not found');
+    const definition = version.parameterDefinitions.find((item) => item.id === parameterId);
+    if (!definition) throw new NotFoundException('Plant parameter definition not found');
+    try {
+      validateCatalogConfiguration(version, version.parameterDefinitions);
+    } catch (error) {
+      throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Catalog configuration is invalid');
+    }
+
+    const checksum = plantParameterDefinitionChecksum(definition);
+    const existing = await this.prisma.plantConfigAuditEvent.findFirst({
+      where: {
+        organizationId,
+        action: 'CATALOG_PARAMETER_USER_VALIDATED',
+        entityType: 'PlantParameterDefinition',
+        entityId: parameterId,
+        toChecksum: checksum,
+        actorUserId: actor.id,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, actorUserId: true, createdAt: true },
+    });
+    if (existing) {
+      return {
+        parameterId,
+        parameterKey: definition.parameterKey,
+        validated: true,
+        validatedByUserId: existing.actorUserId,
+        validatedAt: existing.createdAt,
+      };
+    }
+
+    const audit = await this.prisma.plantConfigAuditEvent.create({
+      data: {
+        actorUserId: actor.id,
+        organizationId,
+        action: 'CATALOG_PARAMETER_USER_VALIDATED',
+        entityType: 'PlantParameterDefinition',
+        entityId: parameterId,
+        toChecksum: checksum,
+        details: { catalogVersionId: versionId, parameterKey: definition.parameterKey, reviewType: 'USER_REVIEW' },
+      },
+      select: { actorUserId: true, createdAt: true },
+    });
+    return {
+      parameterId,
+      parameterKey: definition.parameterKey,
+      validated: true,
+      validatedByUserId: audit.actorUserId,
+      validatedAt: audit.createdAt,
+    };
+  }
+
+  async listCatalogParameterValidations(organizationId: string, versionId: string, actor: AuthenticatedUser) {
+    await this.assertCatalogVersionOrganization(organizationId, actor, versionId, true);
+    const version = await this.prisma.plantCatalogVersion.findFirst({
+      where: { id: versionId, plantCatalog: { organizationId } },
+      include: { parameterDefinitions: true },
+    });
+    if (!version) throw new NotFoundException('Plant catalog version not found');
+    if (version.parameterDefinitions.length === 0) return [];
+
+    const audits = await this.prisma.plantConfigAuditEvent.findMany({
+      where: {
+        organizationId,
+        action: 'CATALOG_PARAMETER_USER_VALIDATED',
+        entityType: 'PlantParameterDefinition',
+        entityId: { in: version.parameterDefinitions.map(({ id }) => id) },
+        actorUserId: { not: null },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { entityId: true, actorUserId: true, toChecksum: true, createdAt: true },
+    });
+    const latestByParameter = new Map<string, (typeof audits)[number]>();
+    for (const audit of audits) {
+      if (!latestByParameter.has(audit.entityId)) latestByParameter.set(audit.entityId, audit);
+    }
+    return version.parameterDefinitions.map((definition) => {
+      const audit = latestByParameter.get(definition.id);
+      const validated = audit?.toChecksum === plantParameterDefinitionChecksum(definition);
+      return {
+        parameterId: definition.id,
+        parameterKey: definition.parameterKey,
+        validated,
+        validatedByUserId: validated ? audit?.actorUserId ?? null : null,
+        validatedAt: validated ? audit?.createdAt ?? null : null,
+      };
     });
   }
 

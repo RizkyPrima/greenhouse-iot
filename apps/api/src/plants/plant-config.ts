@@ -54,6 +54,24 @@ export function configChecksum(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
 }
 
+export function plantParameterDefinitionChecksum(definition: {
+  parameterKey: string;
+  label: string;
+  dataType: string;
+  unit: string | null;
+  valueSchema: unknown;
+  metadataSchema: unknown;
+}): string {
+  return configChecksum({
+    parameterKey: definition.parameterKey,
+    label: definition.label,
+    dataType: definition.dataType,
+    unit: definition.unit,
+    valueSchema: definition.valueSchema,
+    metadataSchema: definition.metadataSchema,
+  });
+}
+
 export function assertSchema2020(schema: JsonSchema): void {
   if (schema.$schema !== PLANT_SCHEMA_DIALECT) {
     throw new Error(`Schema must declare ${PLANT_SCHEMA_DIALECT}`);

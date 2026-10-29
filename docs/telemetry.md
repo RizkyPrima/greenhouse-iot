@@ -98,10 +98,24 @@ ESP32-S3. This is a separate protocol from actuator commands:
   `FAILED`. A successful broker publish is not an applied-device acknowledgement.
 
 The current firmware exposes `temperature`, `humidity`, `soil_moisture`, and `light_intensity`.
-The backend only maps catalog keys `air_temperature`, `relative_humidity`, `soil_moisture`, and
-`light_intensity`. Other catalog parameters (including pH, TDS, and water temperature) are rejected
-until firmware and registered sensor support exist. The current firmware reports
-`sensorDataMode: "SIMULATED"`; this is not evidence that physical sensors are installed or calibrated.
+The backend maps catalog keys `air_temperature`, `relative_humidity`, `soil_moisture`, and
+`light_intensity`; its telemetry unit is `lux`. AI Plant Setup includes `light_intensity` as a
+candidate parameter and fixes its displayed unit to `lux`. Firmware reports simulated light readings
+by default and sets `sensorDataMode` from `USE_PHYSICAL_SENSORS`; when physical sensors are enabled,
+the LDR conversion is only an estimate and must not be treated as calibrated lux without
+hardware-specific calibration. Other catalog parameters (including pH, TDS, and water temperature)
+are rejected until firmware and registered sensor support exist. `sensorDataMode: "SIMULATED"` is
+not evidence that physical sensors are installed or calibrated.
+
+Firmware `1.1.0-esp32s3` advertises `capabilities.plantConfiguration: "plant-monitoring/v1"` on
+every `/status` heartbeat and subscribes to the separate `/config` topic. Source code changes do
+not update a controller already in service: compile and upload
+`firmware/esp32_s3_greenhouse/esp32_s3_greenhouse.ino` to the ESP32-S3, reconnect it to MQTT, and
+wait for a fresh heartbeat. Confirm the reported firmware is `1.1.0-esp32s3` and the monitoring
+capability is present before applying configuration. If the device still shows an older firmware
+or no capability, verify the flashed board, MQTT greenhouse/device identifiers, broker connection,
+and that `/status` messages from that device reach the API. No monitoring configuration is sent
+while the capability is absent.
 
 Applying this feature requires the additive migration
 `apps/api/prisma/migrations/20261028170000_phase10_7_monitoring_config_delivery/migration.sql`.

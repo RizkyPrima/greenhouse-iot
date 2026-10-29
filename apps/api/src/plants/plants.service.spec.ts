@@ -1,7 +1,7 @@
 import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import { PlatformPermission, UserRole } from '@prisma/client';
+import { PlatformPermission, Prisma, UserRole } from '@prisma/client';
 import { PlantsService } from './plants.service.js';
-import { configChecksum } from './plant-config.js';
+import { configChecksum, plantParameterDefinitionChecksum } from './plant-config.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 
 describe('PlantsService tenant access', () => {
@@ -82,6 +82,61 @@ describe('PlantsService catalog parameters and publishing', () => {
     getMembership: vi.fn().mockResolvedValue({ organizationId: 'org-a', role: UserRole.OWNER }),
     organizationExists: vi.fn().mockResolvedValue(true),
   };
+
+  it('records user validation against the exact parameter definition checksum', async () => {
+    const definition = {
+      id: 'parameter-a',
+      parameterKey: 'air_temperature',
+      label: 'Suhu udara',
+      dataType: 'number',
+      unit: '°C',
+      valueSchema: { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'number' },
+      metadataSchema: {},
+    };
+    const version = {
+      id: 'catalog-version-a',
+      status: 'DRAFT',
+      configSchemaVersion: 'plant-config/v1',
+      profileDefaults: {},
+      stageTemplates: [],
+      edgeCompatibility: { mode: 'monitoring_only', controller: 'ESP32-S3', schema_version: 1, actuator_commands_enabled: false },
+      parameterDefinitions: [definition],
+    };
+    const auditCreate = vi.fn().mockResolvedValue({ actorUserId: owner.id, createdAt: new Date('2026-10-29T04:00:00.000Z') });
+    const prisma = {
+      plantCatalogVersion: { findFirst: vi.fn().mockResolvedValue(version) },
+      plantConfigAuditEvent: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: auditCreate,
+        findMany: vi.fn().mockResolvedValue([{
+          entityId: definition.id,
+          toChecksum: plantParameterDefinitionChecksum(definition),
+          actorUserId: owner.id,
+          createdAt: new Date('2026-10-29T04:00:00.000Z'),
+        }]),
+      },
+    };
+    const service = new PlantsService(prisma as never, authorization as never);
+    await expect(service.validateCatalogParameter('org-a', 'catalog-version-a', definition.id, owner)).resolves.toMatchObject({
+      parameterId: definition.id,
+      parameterKey: 'air_temperature',
+      validated: true,
+      validatedByUserId: owner.id,
+    });
+    expect(auditCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        actorUserId: owner.id,
+        action: 'CATALOG_PARAMETER_USER_VALIDATED',
+        entityType: 'PlantParameterDefinition',
+        entityId: definition.id,
+        toChecksum: plantParameterDefinitionChecksum(definition),
+      }),
+    }));
+
+    await expect(service.listCatalogParameterValidations('org-a', 'catalog-version-a', owner)).resolves.toMatchObject([
+      { parameterId: definition.id, parameterKey: 'air_temperature', validated: true, validatedByUserId: owner.id },
+    ]);
+  });
 
   it('creates a typed catalog parameter with an explicit unit and schema without inventing limits', async () => {
     const definition = { id: 'parameter-a', parameterKey: 'air_temperature' };
@@ -432,6 +487,182 @@ describe('PlantsService organization catalog access', () => {
 
     await expect(service.listCatalogForOrganization('org-b', owner)).rejects.toBeInstanceOf(ForbiddenException);
     expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('permanently deletes a published version and its dependent workflow data transactionally', async () => {
+    const tx = {
+      plantCatalogVersion: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'version-a', status: 'PUBLISHED', plantCatalogId: 'catalog-a' }),
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      $executeRaw: vi.fn().mockResolvedValue(0),
+      plantProfileVersion: {
+        findMany: vi.fn()
+          .mockResolvedValueOnce([
+            { id: 'profile-version-a', plantProfileId: 'profile-a', sourceCatalogVersionId: 'version-a', adoptedFromVersionId: null },
+            { id: 'profile-version-b', plantProfileId: 'profile-a', sourceCatalogVersionId: 'version-old', adoptedFromVersionId: 'profile-version-a' },
+          ])
+          .mockResolvedValueOnce([]),
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      zonePlantAssignment: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'assignment-a' }]),
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      zoneRuleSet: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'rules-a' }]),
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      zoneDecision: { findMany: vi.fn().mockResolvedValue([{ id: 'decision-a' }]), deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      zoneDecisionFeedback: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      zoneParameterOverride: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      growthStage: { findMany: vi.fn().mockResolvedValue([{ id: 'stage-a' }]), deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      stageParameterConfig: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      plantProfile: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      plantAiProposal: { deleteMany: vi.fn().mockResolvedValue({ count: 2 }) },
+      devicePlantConfiguration: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      plantParameterDefinition: { deleteMany: vi.fn().mockResolvedValue({ count: 2 }) },
+      plantConfigAuditEvent: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      plantCatalogVersion: { findFirst: vi.fn().mockResolvedValue({ id: 'version-a' }) },
+      $executeRaw: vi.fn().mockResolvedValue(0),
+      $transaction: vi.fn((work: (client: typeof tx) => unknown) => work(tx)),
+    };
+    const service = new PlantsService(
+      prisma as never,
+      { getMembership: vi.fn().mockResolvedValue({ role: UserRole.OWNER }), organizationExists: vi.fn().mockResolvedValue(true) } as never,
+    );
+
+    await expect(service.deleteCatalogVersion('org-a', 'version-a', owner))
+      .resolves.toEqual({
+        id: 'version-a',
+        deleted: true,
+        deletedProfileVersionCount: 2,
+        deletedAssignmentCount: 1,
+        deletedProposalCount: 2,
+        deletedDeviceConfigurationCount: 1,
+      });
+    expect(tx.plantCatalogVersion.findFirst).toHaveBeenCalledWith({
+      where: { id: 'version-a', plantCatalog: { organizationId: 'org-a' } },
+      select: { id: true, status: true, plantCatalogId: true },
+    });
+    expect(tx.$executeRaw).toHaveBeenCalledOnce();
+    expect(tx.zoneDecisionFeedback.deleteMany).toHaveBeenCalledWith({ where: { decisionId: { in: ['decision-a'] } } });
+    expect(tx.zoneParameterOverride.deleteMany).toHaveBeenCalledWith({ where: { assignmentId: { in: ['assignment-a'] } } });
+    expect(tx.stageParameterConfig.deleteMany).toHaveBeenCalledWith({ where: { growthStageId: { in: ['stage-a'] } } });
+    expect(tx.plantProfileVersion.deleteMany).toHaveBeenNthCalledWith(1, { where: { id: { in: ['profile-version-b'] } } });
+    expect(tx.plantProfileVersion.deleteMany).toHaveBeenNthCalledWith(2, { where: { id: { in: ['profile-version-a'] } } });
+    expect(tx.plantAiProposal.deleteMany).toHaveBeenCalledWith({ where: { targetCatalogVersionId: 'version-a' } });
+    expect(tx.devicePlantConfiguration.deleteMany).toHaveBeenCalledWith({ where: { catalogVersionId: 'version-a' } });
+    expect(tx.plantParameterDefinition.deleteMany).toHaveBeenCalledWith({ where: { plantCatalogVersionId: 'version-a' } });
+    expect(tx.plantCatalogVersion.deleteMany).toHaveBeenCalledWith({ where: { id: 'version-a', status: 'PUBLISHED' } });
+    expect(tx.plantConfigAuditEvent.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        action: 'CATALOG_VERSION_CASCADE_DELETED',
+        entityId: 'version-a',
+        organizationId: 'org-a',
+        details: expect.objectContaining({ deletedStatus: 'PUBLISHED', deletedDeviceConfigurationCount: 1 }),
+      }),
+    }));
+  });
+
+  it('deletes a draft version with no dependent workflow rows', async () => {
+    const tx = {
+      $executeRaw: vi.fn().mockResolvedValue(0),
+      plantCatalogVersion: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'version-a', status: 'DRAFT', plantCatalogId: 'catalog-a' }),
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      plantProfileVersion: { findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn() },
+      zonePlantAssignment: { findMany: vi.fn(), deleteMany: vi.fn() },
+      zoneRuleSet: { findMany: vi.fn(), deleteMany: vi.fn() },
+      zoneDecision: { findMany: vi.fn(), deleteMany: vi.fn() },
+      zoneDecisionFeedback: { deleteMany: vi.fn() },
+      zoneParameterOverride: { deleteMany: vi.fn() },
+      growthStage: { findMany: vi.fn(), deleteMany: vi.fn() },
+      stageParameterConfig: { deleteMany: vi.fn() },
+      plantProfile: { deleteMany: vi.fn() },
+      plantAiProposal: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      devicePlantConfiguration: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      plantParameterDefinition: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      plantConfigAuditEvent: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const service = new PlantsService(
+      { plantCatalogVersion: { findFirst: vi.fn().mockResolvedValue({ id: 'version-a' }) }, $transaction: vi.fn((work: (client: typeof tx) => unknown) => work(tx)) } as never,
+      { getMembership: vi.fn().mockResolvedValue({ role: UserRole.OWNER }), organizationExists: vi.fn().mockResolvedValue(true) } as never,
+    );
+
+    await expect(service.deleteCatalogVersion('org-a', 'version-a', owner)).resolves.toMatchObject({ deleted: true });
+    expect(tx.$executeRaw).toHaveBeenCalledOnce();
+  });
+
+  it('does not delete a version from another organization', async () => {
+    const service = new PlantsService(
+      { plantCatalogVersion: { findFirst: vi.fn().mockResolvedValue(null) }, $transaction: vi.fn() } as never,
+      { getMembership: vi.fn().mockResolvedValue({ role: UserRole.OWNER }), organizationExists: vi.fn().mockResolvedValue(true) } as never,
+    );
+
+    await expect(service.deleteCatalogVersion('org-a', 'version-a', owner)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('returns a structured conflict if an unhandled database reference blocks deletion', async () => {
+    const foreignKeyError = new Prisma.PrismaClientKnownRequestError('Foreign key constraint', {
+      code: 'P2003',
+      clientVersion: 'test',
+    });
+    const transaction = vi.fn().mockRejectedValue(foreignKeyError);
+    const service = new PlantsService(
+      { plantCatalogVersion: { findFirst: vi.fn().mockResolvedValue({ id: 'version-a' }) }, $transaction: transaction } as never,
+      { getMembership: vi.fn().mockResolvedValue({ role: UserRole.OWNER }), organizationExists: vi.fn().mockResolvedValue(true) } as never,
+    );
+
+    await expect(service.deleteCatalogVersion('org-a', 'version-a', owner)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining('No data was deleted'),
+    });
+    expect(transaction).toHaveBeenCalledOnce();
+  });
+
+  it('returns a structured conflict for a Prisma required-relation violation', async () => {
+    const relationError = new Prisma.PrismaClientKnownRequestError('Required relation violation', {
+      code: 'P2014',
+      clientVersion: 'test',
+    });
+    const service = new PlantsService(
+      {
+        plantCatalogVersion: { findFirst: vi.fn().mockResolvedValue({ id: 'version-a' }) },
+        $transaction: vi.fn().mockRejectedValue(relationError),
+      } as never,
+      { getMembership: vi.fn().mockResolvedValue({ role: UserRole.OWNER }), organizationExists: vi.fn().mockResolvedValue(true) } as never,
+    );
+
+    await expect(service.deleteCatalogVersion('org-a', 'version-a', owner)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining('No data was deleted'),
+    });
+  });
+
+  it('explains that the cascade trigger migration is needed for database trigger errors', async () => {
+    const triggerError = new Prisma.PrismaClientUnknownRequestError(
+      'ConnectorError QueryError(PostgresError { code: "P0001", message: "Stage configuration is immutable" })',
+      { clientVersion: 'test' },
+    );
+    const service = new PlantsService(
+      {
+        plantCatalogVersion: { findFirst: vi.fn().mockResolvedValue({ id: 'version-a' }) },
+        $transaction: vi.fn().mockRejectedValue(triggerError),
+      } as never,
+      { getMembership: vi.fn().mockResolvedValue({ role: UserRole.OWNER }), organizationExists: vi.fn().mockResolvedValue(true) } as never,
+    );
+
+    await expect(service.deleteCatalogVersion('org-a', 'version-a', owner)).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        code: 'PLANT_CASCADE_MIGRATION_REQUIRED',
+        message: expect.stringContaining('Apply migration 20261029130000_phase10_7_explicit_plant_cascade_delete'),
+      }),
+    });
   });
 });
 

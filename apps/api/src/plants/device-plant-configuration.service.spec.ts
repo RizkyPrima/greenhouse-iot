@@ -1,19 +1,25 @@
 import { ConflictException, ForbiddenException, UnprocessableEntityException } from '@nestjs/common';
 import { DevicePlantConfigurationStatus, PlantVersionStatus, UserRole } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { plantParameterDefinitionChecksum } from './plant-config.js';
 import { DevicePlantConfigurationService } from './device-plant-configuration.service.js';
 
 const actor = { id: 'owner-a' } as AuthenticatedUser;
 const configId = 'c5748e28-4c7a-48ef-a742-24bdf37d48e3';
 
 function harness() {
+  const parameterDefinitions = [
+    { id: 'parameter-air', parameterKey: 'air_temperature', label: 'Suhu udara', dataType: 'number', unit: '°C', valueSchema: { type: 'number' }, metadataSchema: {} },
+    { id: 'parameter-humidity', parameterKey: 'relative_humidity', label: 'Kelembapan', dataType: 'number', unit: '%', valueSchema: { type: 'number' }, metadataSchema: {} },
+    { id: 'parameter-light', parameterKey: 'light_intensity', label: 'Intensitas cahaya', dataType: 'number', unit: 'lux', valueSchema: { type: 'number' }, metadataSchema: {} },
+  ];
   const device = {
     id: 'device-db-1',
     deviceId: 'esp-1',
     status: 'ONLINE',
     lastSeenAt: new Date(),
     greenhouse: { id: 'greenhouse-db-1', code: 'GH-1' },
-    sensors: [{ code: 'temperature' }, { code: 'humidity' }],
+    sensors: [{ code: 'temperature' }, { code: 'humidity' }, { code: 'light_intensity' }],
   };
   const prisma = {
     device: { findFirst: vi.fn().mockResolvedValue(device) },
@@ -23,7 +29,7 @@ function harness() {
           capabilities: {
             plantConfiguration: 'plant-monitoring/v1',
             sensorDataMode: 'SIMULATED',
-            sensorCodes: ['temperature', 'humidity'],
+            sensorCodes: ['temperature', 'humidity', 'light_intensity'],
           },
         },
         receivedAt: new Date(),
@@ -33,11 +39,14 @@ function harness() {
       findFirst: vi.fn().mockResolvedValue({
         id: 'catalog-version-1',
         status: PlantVersionStatus.PUBLISHED,
-        parameterDefinitions: [
-          { parameterKey: 'air_temperature' },
-          { parameterKey: 'relative_humidity' },
-        ],
+        parameterDefinitions,
       }),
+    },
+    plantConfigAuditEvent: {
+      findMany: vi.fn().mockResolvedValue(parameterDefinitions.map((definition) => ({
+        entityId: definition.id,
+        toChecksum: plantParameterDefinitionChecksum(definition),
+      }))),
     },
     devicePlantConfiguration: {
       findUnique: vi.fn().mockResolvedValue(null),
@@ -71,7 +80,7 @@ describe('DevicePlantConfigurationService', () => {
     const result = await h.service.apply('org-a', 'device-db-1', {
       configurationId: configId,
       catalogVersionId: 'catalog-version-1',
-      parameterKeys: ['air_temperature', 'relative_humidity'],
+      parameterKeys: ['air_temperature', 'relative_humidity', 'light_intensity'],
     }, actor);
 
     expect(result.status).toBe(DevicePlantConfigurationStatus.SENT);
@@ -87,8 +96,8 @@ describe('DevicePlantConfigurationService', () => {
     expect(JSON.parse(h.mqtt.publish.mock.calls[0][1] as string)).toMatchObject({
       type: 'plant_config',
       mode: 'monitoring_only',
-      parameterKeys: ['air_temperature', 'relative_humidity'],
-      sensorCodes: ['temperature', 'humidity'],
+      parameterKeys: ['air_temperature', 'relative_humidity', 'light_intensity'],
+      sensorCodes: ['temperature', 'humidity', 'light_intensity'],
     });
     expect(h.mqtt.publish.mock.calls[0][0]).not.toContain('/command');
   });
@@ -107,6 +116,46 @@ describe('DevicePlantConfigurationService', () => {
       parameterKeys: ['nutrient_solution_ph'],
     }, actor)).rejects.toBeInstanceOf(UnprocessableEntityException);
     expect(h.prisma.devicePlantConfiguration.create).not.toHaveBeenCalled();
+    expect(h.mqtt.publish).not.toHaveBeenCalled();
+  });
+
+  it('rejects selected parameters unless their current definitions have a user validation record', async () => {
+    const h = harness();
+    h.prisma.plantConfigAuditEvent.findMany.mockResolvedValue([]);
+
+    await expect(h.service.apply('org-a', 'device-db-1', {
+      configurationId: configId,
+      catalogVersionId: 'catalog-version-1',
+      parameterKeys: ['air_temperature'],
+    }, actor)).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'DEVICE_PARAMETER_NOT_USER_VALIDATED',
+        parameterKeys: ['air_temperature'],
+      }),
+    });
+    expect(h.prisma.devicePlantConfiguration.create).not.toHaveBeenCalled();
+    expect(h.mqtt.publish).not.toHaveBeenCalled();
+  });
+
+  it('does not republish a pending retry if its parameter validation is missing', async () => {
+    const h = harness();
+    h.prisma.devicePlantConfiguration.findUnique.mockResolvedValue({
+      configurationId: configId,
+      organizationId: 'org-a',
+      deviceId: 'device-db-1',
+      catalogVersionId: 'catalog-version-1',
+      payload: { parameterKeys: ['air_temperature'] },
+      status: DevicePlantConfigurationStatus.PENDING,
+    });
+    h.prisma.plantConfigAuditEvent.findMany.mockResolvedValue([]);
+
+    await expect(h.service.apply('org-a', 'device-db-1', {
+      configurationId: configId,
+      catalogVersionId: 'catalog-version-1',
+      parameterKeys: ['air_temperature'],
+    }, actor)).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'DEVICE_PARAMETER_NOT_USER_VALIDATED' }),
+    });
     expect(h.mqtt.publish).not.toHaveBeenCalled();
   });
 

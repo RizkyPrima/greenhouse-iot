@@ -187,7 +187,7 @@ export class PlantAiRecommendationService {
       };
     }
     if (!this.provider.isConfigured()) {
-      throw new ServiceUnavailableException({ code: 'LLM_PROVIDER_NOT_CONFIGURED', message: 'Gemini recommendation provider is not configured' });
+      throw new ServiceUnavailableException({ code: 'LLM_PROVIDER_NOT_CONFIGURED', message: 'AI recommendation provider is not configured' });
     }
 
     const prompt = {
@@ -197,8 +197,8 @@ export class PlantAiRecommendationService {
       parameters: parameterDefinitions.map(({ parameterKey, label, dataType, unit, valueSchema }) => ({ parameterKey, label, dataType, unit, valueSchema })),
       verifiedEvidence: evidenceSummary,
     };
-    const generated = await this.provider.generateJson(prompt, RECOMMENDATION_OUTPUT_SCHEMA);
-    const parsed = this.parseRecommendation(generated);
+    const generated = await this.provider.generateJsonWithMetadata(prompt, RECOMMENDATION_OUTPUT_SCHEMA);
+    const parsed = this.parseRecommendation(generated.output);
     const evidenceById = new Map(relevantEvidence.map((item) => [item.id, item]));
     const allowedKeys = new Set(parameterDefinitions.map((item) => item.parameterKey));
     if (parsed.some((item) => !allowedKeys.has(item.parameterKey))) {
@@ -274,7 +274,7 @@ export class PlantAiRecommendationService {
       stageTemplates: stageTemplates.map((template) => template.code === stage.code ? { ...template, config: stageConfig } : template),
       edgeRequirements: record(version.sourceCatalogVersion.edgeCompatibility), evidenceReferences: refs,
       validationFindings: findings, unresolvedQuestions: findings.length ? ['Review missing, conflicting, or unit-mismatched parameter evidence before applying this proposal.'] : [],
-      provider: { name: this.provider.getName(), ...(this.provider.getModel() ? { model: this.provider.getModel() } : {}) }, createdAt: timestamp, updatedAt: timestamp, status: 'PROPOSED' as const,
+      provider: generated.provider, createdAt: timestamp, updatedAt: timestamp, status: 'PROPOSED' as const,
     };
     const contractValidation = validatePlantAiProposal(proposalContract);
     if (!contractValidation.valid) throw new BadGatewayException({ code: 'LLM_RECOMMENDATION_REJECTED', message: 'Gemini output failed Plant Standard validation', findings: contractValidation.findings });

@@ -8,13 +8,19 @@ The deterministic expert checks reuse the Plant Proposal contract validator and 
 
 ## Provider configuration
 
-The API supports an optional OpenAI-compatible chat-completions endpoint through these environment variables:
+Set `LLM_PROVIDER=GEMINI` or `LLM_PROVIDER=OPENAI` to choose the preferred provider; the other
+configured provider is used when the preferred provider reports a quota/rate limit, times out, or
+is temporarily unavailable. Defaults are `gemini-3.8-flash` and `gpt-5.4-mini`; `GEMINI_MODEL` and
+`OPENAI_MODEL` optionally override them.
+Legacy Gemini setups may continue to use `LLM_API_KEY` and `LLM_MODEL`. Either provider key may be
+omitted, but at least one must be configured. Invalid credentials, invalid requests, and malformed
+responses fail closed rather than switching providers. Both keys must remain in backend secret
+storage and never be committed or logged. OpenAI API usage requires separate API billing.
 
-- `LLM_API_BASE_URL` — provider base URL, without the `/chat/completions` suffix.
-- `LLM_API_KEY` — credential; keep it in the deployment secret store and never commit it.
-- `LLM_MODEL` — provider model identifier.
-
-All three are required to call the provider. When absent, the API returns `PROVIDER_NOT_CONFIGURED` and stores no generated text or proposal. If no matching verified crop/stage evidence exists, it returns `INSUFFICIENT_EVIDENCE` without calling the provider. Provider errors and malformed responses fail closed.
+If neither provider is configured, the API returns `PROVIDER_NOT_CONFIGURED` and stores no
+generated text or proposal. If no matching verified crop/stage evidence exists, it returns
+`INSUFFICIENT_EVIDENCE` without calling either provider. Provider attempts share a 60-second
+timeout budget.
 
 The provider receives only the selected crop/stage, published parameter schemas, and selected verified evidence summaries. It must return JSON recommendations that cite the supplied evidence IDs. Recommendation values are checked against the existing proposal contract before persistence.
 

@@ -13,6 +13,7 @@ import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { MqttService } from '../mqtt/mqtt.service.js';
 import { buildGreenhouseTopic } from '../mqtt/mqtt.constants.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { plantParameterDefinitionChecksum } from './plant-config.js';
 import type { ApplyDevicePlantConfigurationDto } from './device-plant-configuration.dto.js';
 
 const PARAMETER_SENSOR_CODES: Record<string, string> = {
@@ -117,6 +118,22 @@ export class DevicePlantConfigurationService {
         throw new ConflictException('Configuration id was reused with different catalog parameters.');
       }
       if (existing.status === DevicePlantConfigurationStatus.PENDING) {
+        const catalogVersion = await this.prisma.plantCatalogVersion.findFirst({
+          where: {
+            id: existing.catalogVersionId,
+            status: PlantVersionStatus.PUBLISHED,
+            plantCatalog: { organizationId },
+          },
+          include: { parameterDefinitions: true },
+        });
+        if (!catalogVersion) throw new ConflictException('Only a published catalog version belonging to this organization can be applied.');
+        const definitionsByKey = new Map(catalogVersion.parameterDefinitions.map((definition) => [definition.parameterKey, definition]));
+        const existingKeys = existingPayload.parameterKeys.filter((key): key is string => typeof key === 'string');
+        const definitions = existingKeys.map((key) => definitionsByKey.get(key)).filter((definition) => definition !== undefined);
+        if (definitions.length !== existingKeys.length) {
+          throw new ConflictException('Pending device configuration references parameters outside its published catalog version.');
+        }
+        await this.assertParameterDefinitionsUserValidated(organizationId, definitions);
         return this.publishExisting(existing);
       }
       return existing;
@@ -174,6 +191,9 @@ export class DevicePlantConfigurationService {
       });
     }
 
+    const selectedDefinitions = input.parameterKeys.map((key) => definitions.get(key)!);
+    await this.assertParameterDefinitionsUserValidated(organizationId, selectedDefinitions);
+
     const sensorCodes = input.parameterKeys.map((key) => PARAMETER_SENSOR_CODES[key]);
     const reportedSensorCodes = new Set(
       Array.isArray(capability.sensorCodes) ? capability.sensorCodes.filter((code): code is string => typeof code === 'string') : [],
@@ -225,7 +245,47 @@ export class DevicePlantConfigurationService {
       }
       throw error;
     }
+
     return this.publishExisting(delivery);
+  }
+
+  private async assertParameterDefinitionsUserValidated(
+    organizationId: string,
+    selectedDefinitions: Array<{
+      id: string;
+      parameterKey: string;
+      label: string;
+      dataType: string;
+      unit: string | null;
+      valueSchema: unknown;
+      metadataSchema: unknown;
+    }>,
+  ) {
+    const validationAudits = await this.prisma.plantConfigAuditEvent.findMany({
+      where: {
+        organizationId,
+        action: 'CATALOG_PARAMETER_USER_VALIDATED',
+        entityType: 'PlantParameterDefinition',
+        entityId: { in: selectedDefinitions.map(({ id }) => id) },
+        actorUserId: { not: null },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { entityId: true, toChecksum: true },
+    });
+    const latestValidationByParameter = new Map<string, (typeof validationAudits)[number]>();
+    for (const audit of validationAudits) {
+      if (!latestValidationByParameter.has(audit.entityId)) latestValidationByParameter.set(audit.entityId, audit);
+    }
+    const unvalidatedKeys = selectedDefinitions
+      .filter((definition) => latestValidationByParameter.get(definition.id)?.toChecksum !== plantParameterDefinitionChecksum(definition))
+      .map(({ parameterKey }) => parameterKey);
+    if (unvalidatedKeys.length > 0) {
+      throw new UnprocessableEntityException({
+        code: 'DEVICE_PARAMETER_NOT_USER_VALIDATED',
+        message: 'One or more selected parameters have not been reviewed by a user since their latest changes.',
+        parameterKeys: unvalidatedKeys,
+      });
+    }
   }
 
   async getDelivery(organizationId: string, configurationId: string, actor: AuthenticatedUser) {

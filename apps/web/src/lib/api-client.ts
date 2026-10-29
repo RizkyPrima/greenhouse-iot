@@ -2,13 +2,14 @@ import {
   User, Organization, OrganizationMember, UserMembership, Greenhouse, Zone, Device, Sensor, Actuator,
   RealtimeDeviceState, TelemetryRecord, PlantCatalog, PlantCatalogVersion, PlantProfile, PlantProfileVersion,
   GrowthStage, PlantParameterDefinition, PlatformAdminGrant, PlantConfigAuditEvent, ZonePlantAssignment,
+  PlantParameterValidation,
   ZoneParameterOverride, ZonePlantAssignmentDetails, EffectiveZonePlantConfig, CreatePlantCatalogDto, CreatePlantCatalogVersionDto,
   UpdatePlantCatalogVersionDto, CreatePlantParameterDefinitionDto, UpdatePlantParameterDefinitionDto,
   CreatePlantProfileDto, UpdatePlantProfileDraftDto, CreateDraftGrowthStageDto, UpdateGrowthStageDto,
   AdoptPlantCatalogVersionDto, ActivatePlantProfileDto, CreateZoneOverrideDto, CreatePlatformGrantDto,
   PlatformCapabilities, PlantAiProposalRecord,
   PlantRecommendationResult, PlantScientificEvidenceRecord, GeneratePlantSetupDto, PlantSetupCandidateResult,
-  PlantConfigurationDevice, DevicePlantConfigurationDelivery,
+  PlantConfigurationDevice, DevicePlantConfigurationDelivery, ResearchMetadataSearchResponse,
 } from '@/types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
@@ -378,6 +379,10 @@ class ApiClient {
     return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/versions/${encodeURIComponent(versionId)}/draft`, { method: 'PATCH', body: JSON.stringify(payload) });
   }
 
+  async deletePlantCatalogVersion(organizationId: string, versionId: string): Promise<{ id: string; deleted: true; deletedProfileVersionCount: number; deletedAssignmentCount: number; deletedProposalCount: number; deletedDeviceConfigurationCount: number }> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/versions/${encodeURIComponent(versionId)}`, { method: 'DELETE' });
+  }
+
   async createPlantParameterDefinition(organizationId: string, versionId: string, payload: CreatePlantParameterDefinitionDto): Promise<PlantParameterDefinition> {
     return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/versions/${encodeURIComponent(versionId)}/parameters`, { method: 'POST', body: JSON.stringify(payload) });
   }
@@ -388,6 +393,14 @@ class ApiClient {
 
   async deletePlantParameterDefinition(organizationId: string, versionId: string, parameterId: string): Promise<{ id: string; deleted: true }> {
     return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/versions/${encodeURIComponent(versionId)}/parameters/${encodeURIComponent(parameterId)}`, { method: 'DELETE' });
+  }
+
+  async validatePlantCatalogParameter(organizationId: string, versionId: string, parameterId: string): Promise<PlantParameterValidation> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/versions/${encodeURIComponent(versionId)}/parameters/${encodeURIComponent(parameterId)}/validate`, { method: 'POST' });
+  }
+
+  async getPlantCatalogParameterValidations(organizationId: string, versionId: string): Promise<PlantParameterValidation[]> {
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-catalog/versions/${encodeURIComponent(versionId)}/parameter-validations`);
   }
 
   async publishPlantCatalogVersion(organizationId: string, versionId: string): Promise<PlantCatalogVersion> {
@@ -439,7 +452,15 @@ class ApiClient {
   }
 
   async generatePlantSetup(organizationId: string, payload: GeneratePlantSetupDto): Promise<PlantSetupCandidateResult> {
-    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-setups/generate`, { method: 'POST', body: JSON.stringify(payload) });
+    return this.request(`/organizations/${encodeURIComponent(organizationId)}/plant-setups/generate`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(70_000),
+    });
+  }
+
+  async searchResearchSources(payload: { query: string; providers: Array<'crossref' | 'openalex'>; limit: number }): Promise<ResearchMetadataSearchResponse> {
+    return this.request('/research/sources/search', { method: 'POST', body: JSON.stringify(payload) });
   }
 
   async createPlantProfile(organizationId: string, payload: CreatePlantProfileDto): Promise<PlantProfile> {

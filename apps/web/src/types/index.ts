@@ -265,10 +265,44 @@ export interface GeneratePlantSetupDto {
 export interface PlantSetupCandidateResult {
   status: 'CANDIDATES_FOR_REVIEW';
   scientificNameSuggestion: string | null;
-  parameters: Array<{ parameterKey: string; label: string; dataType: 'number'; unit: null; evidenceStatus: 'NOT_ASSESSED' }>;
+  parameters: Array<{
+    parameterKey: string;
+    label: string;
+    dataType: 'number';
+    unit: string | null;
+    recommendedValue: number | null;
+    minimumValue: number | null;
+    maximumValue: number | null;
+    note: string;
+    evidenceStatus: 'NOT_ASSESSED';
+  }>;
   growthStages: Array<{ code: string; label: string; sequence: number }>;
   provider: { name: string; model?: string };
   findings: Array<{ code: string; explanation: string }>;
+  sourceCandidates: Array<{
+    provider: 'crossref' | 'openalex';
+    title: string;
+    authors: string[];
+    doi?: string;
+    publicationYear?: number;
+    journal?: string;
+    sourceUrl?: string;
+  }>;
+  sourceSearchStatus: 'NOT_SEARCHED' | 'COMPLETED' | 'PARTIAL' | 'UNAVAILABLE';
+  sourceSearchWarning?: string;
+}
+export interface ResearchMetadataSearchResponse {
+  job: { status: string };
+  sources: Array<{
+    title: string;
+    authors: unknown;
+    metadataProvider: string | null;
+    doiNormalized: string | null;
+    publicationYear: number | null;
+    journal: string | null;
+    sourceUrl: string | null;
+  }>;
+  errors: Array<{ provider: string; code: string }>;
 }
 export type PlantProfileStatus = 'ACTIVE' | 'ARCHIVED';
 export type PlantProfileVersionStatus = 'DRAFT' | 'VALIDATED' | 'RETIRED';
@@ -497,6 +531,14 @@ export interface PlantConfigAuditEvent {
   details: PlantJsonObject | null;
   requestId: string | null;
   createdAt: string;
+}
+
+export interface PlantParameterValidation {
+  parameterId: string;
+  parameterKey: string;
+  validated: boolean;
+  validatedByUserId: string | null;
+  validatedAt: string | null;
 }
 
 export interface ZonePlantAssignment {

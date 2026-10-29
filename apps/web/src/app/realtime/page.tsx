@@ -247,7 +247,7 @@ export default function RealtimePage() {
       temp_air: { code: 'temp_air', label: 'Air Temperature', value: 0, unit: '°C', deviceMqttId: '--', timestamp: '--' },
       humidity: { code: 'humidity', label: 'Air Humidity', value: 0, unit: '%', deviceMqttId: '--', timestamp: '--' },
       soil_moisture: { code: 'soil_moisture', label: 'Soil Moisture', value: 0, unit: '%', deviceMqttId: '--', timestamp: '--' },
-      light_intensity: { code: 'light_intensity', label: 'Solar Radiation / Light', value: 0, unit: 'Lux', deviceMqttId: '--', timestamp: '--' },
+      light_intensity: { code: 'light_intensity', label: 'Intensitas cahaya', value: 0, unit: 'lux', deviceMqttId: '--', timestamp: '--' },
       co2: { code: 'co2', label: 'CO2 Concentration', value: 0, unit: 'ppm', deviceMqttId: '--', timestamp: '--' },
       temp_soil: { code: 'temp_soil', label: 'Soil Substrate Temp', value: 0, unit: '°C', deviceMqttId: '--', timestamp: '--' },
     };

@@ -59,14 +59,19 @@ $ npm run test:cov
 
 ## Plant AI recommendations (Phase 10.7)
 
-The recommendation provider uses Gemini's official OpenAI-compatible endpoint. Configure
-`LLM_API_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` in the backend environment; never put the
-API key in frontend code, source control, or logs. `LLM_MODEL` is deliberately not defaulted:
-check the [model list](https://ai.google.dev/gemini-api/docs/models) and active
-[AI Studio rate limits](https://aistudio.google.com/rate-limit?timeRange=last-28-days) for your
-project before choosing a model ID. Gemini 3.1 Flash-Lite is a text-output model with
-[documented structured-output support](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite);
-use it only if it is listed and enabled for your project.
+Set `LLM_PROVIDER=GEMINI` or `LLM_PROVIDER=OPENAI` to choose the preferred provider. The other
+configured provider is used when the preferred provider hits a quota/rate limit, times out, or is
+temporarily unavailable. Defaults are `gemini-3.8-flash` and `gpt-5.4-mini`; use `GEMINI_MODEL`
+or `OPENAI_MODEL` to override them. Legacy Gemini configurations using `LLM_API_KEY` and
+`LLM_MODEL` remain supported. Either key may be omitted; at least one provider must be configured.
+Invalid credentials and invalid requests are not retried against the other provider.
+Never put an API key in frontend code, source control, or logs. OpenAI usage requires API billing
+and is billed separately from ChatGPT. Provider attempts share a 60-second timeout budget.
+The model defaults are documented by their providers:
+[Gemini 3.8 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash) and
+[GPT-5.4 mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini). OpenAI's current
+model documentation lists Chat Completions and structured outputs support; this fallback uses
+JSON mode and validates the response in the backend.
 
 The first request requires a published source Plant Standard, a validated profile version,
 one of its growth stages, and verified evidence matching the crop, stage, and parameter.
@@ -100,10 +105,10 @@ return structured errors and do not create a proposal.
 ## AI Plant Setup
 
 The website's primary entry point is `/plant-setup` (shown as **Konfigurasi Tanaman**). It sends the
-plant identity and cultivation method to the configured Gemini provider to propose parameter identities and growth-stage labels.
-The response schema intentionally has no fields for values, ranges, units, citations, or source
-URLs. Those are not produced as facts or marked verified. The user reviews/edits candidates and
-can save a tenant-scoped catalog version as `DRAFT`; the version is never published by generation.
+plant identity and cultivation method to the configured AI provider to propose parameter identities and growth-stage labels.
+The result may include provisional values and ranges as unverified AI candidates. It does not create
+citations, source URLs, or verified evidence. The user reviews/edits candidates and can save a
+tenant-scoped catalog version as `DRAFT`; the version is never published by generation.
 Manual parameter/stage changes and their origin are recorded in the existing configuration audit.
 Source search is not part of this call: the Research Source Registry requires its existing platform
 permission. The setup page does not fabricate recommendations, citations, or source matches; use
@@ -111,7 +116,8 @@ the evidence workflow and the existing recommendation engine after the profile i
 The explicit **Setujui & terbitkan standar** action calls the existing catalog publish validator,
 then creates or adopts a profile draft from that published version. The profile remains a draft
 until its existing profile validation workflow is completed. Catalog/profile state can be resumed
-from the setup page; published standards remain immutable.
+from the setup page. After publication, the temporary review snapshot is removed from browser
+session storage; the published catalog standard and profile remain available and immutable.
 
 After the standard is published, the same page can list compatible ESP32-S3 devices and their last
 reported monitoring capability. Applying a selection is a separate, explicit OWNER/ADMIN action.
@@ -138,8 +144,8 @@ The corresponding owner/admin endpoint is
 `cultivationMethod` (`hydroponic_tower`, `hydroponic_nft`, `hydroponic_dwc`, `soil`, or `other`),
 and optional scientific name, cultivar, and stage context. It writes no database rows.
 `POST /organizations/:organizationId/plant-catalog` and the existing draft-version/parameter APIs
-are used only after the user chooses **Simpan draft setup**. A live provider smoke test is opt-in:
-set `LLM_LIVE_TEST=true` in the API test process (with the three LLM variables configured) and run
+are used only after the user chooses **Simpan draft setup**. A Gemini live provider smoke test is opt-in:
+set `LLM_LIVE_TEST=true` and `GEMINI_API_KEY` in the API test process and run
 `npm test -- --no-file-parallelism src/plants/gemini.live.spec.ts` from `apps/api`. Without this
 flag, the live test is skipped; mocked provider tests do not establish live Gemini availability.
 

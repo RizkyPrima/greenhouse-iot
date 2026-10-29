@@ -95,7 +95,23 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsOptional()
+  GEMINI_API_KEY?: string;
+
+  @IsString()
+  @IsOptional()
+  OPENAI_API_KEY?: string;
+
+  @IsString()
+  @IsOptional()
   LLM_MODEL?: string;
+
+  @IsString()
+  @IsOptional()
+  GEMINI_MODEL?: string;
+
+  @IsString()
+  @IsOptional()
+  OPENAI_MODEL?: string;
 
   @IsString()
   @IsOptional()

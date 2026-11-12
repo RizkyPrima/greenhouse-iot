@@ -27,7 +27,7 @@ function harness() {
       findFirst: vi.fn().mockResolvedValue({
         rawPayload: {
           capabilities: {
-            plantConfiguration: 'plant-monitoring/v1',
+            plantConfiguration: 'plant-monitoring/v2',
             sensorDataMode: 'SIMULATED',
             sensorCodes: ['temperature', 'humidity', 'light_intensity'],
           },

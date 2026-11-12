@@ -144,9 +144,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
     socket.on('connect', handleConnect);
     socket.on('telemetry:update', handleTelemetry);
-    socket.on('telemetry:broadcast', handleTelemetry);
     socket.on('status:update', handleStatus);
-    socket.on('status:broadcast', handleStatus);
     const handleCommandUpdate = (packet: ActuatorCommandUpdate) => setLatestCommandUpdate(packet);
     socket.on('actuator:command:update', handleCommandUpdate);
 
@@ -154,9 +152,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       unsubscribeStatus();
       socket.off('connect', handleConnect);
       socket.off('telemetry:update', handleTelemetry);
-      socket.off('telemetry:broadcast', handleTelemetry);
       socket.off('status:update', handleStatus);
-      socket.off('status:broadcast', handleStatus);
       socket.off('actuator:command:update', handleCommandUpdate);
     };
   }, []);

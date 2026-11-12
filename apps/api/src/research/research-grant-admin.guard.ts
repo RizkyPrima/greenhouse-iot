@@ -9,13 +9,17 @@ export class ResearchGrantAdminGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<{ user?: AuthenticatedUser }>();
     const user = request.user;
-    if (!user?.isActive) throw new ForbiddenException('Active research grant administrator permission required');
+    if (!user?.isActive) throw new ForbiddenException('Active organization OWNER membership required');
 
-    const grant = await this.prisma.platformAdminGrant.findFirst({
-      where: { userId: user.id, permission: 'RESEARCH_SOURCE_GRANT_ADMIN', revokedAt: null },
+    const ownerMembership = await this.prisma.organizationMembership.findFirst({
+      where: {
+        userId: user.id,
+        role: 'OWNER',
+        organization: { deletedAt: null },
+      },
       select: { id: true },
     });
-    if (!grant) throw new ForbiddenException('Research grant management permission required');
+    if (!ownerMembership) throw new ForbiddenException('An active organization OWNER membership is required');
     return true;
   }
 }

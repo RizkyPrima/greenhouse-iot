@@ -632,7 +632,7 @@ describe('AI Plant Setup page', () => {
       firmwareVersion: '1.1.0',
       sensors: [{ code: 'temperature', name: 'Temperature', unit: '°C' }],
       capability: {
-        schema: 'plant-monitoring/v1',
+        schema: 'plant-monitoring/v2',
         sensorCodes: ['temperature'],
         supportedParameterKeys: ['air_temperature'],
         sensorDataMode: 'SIMULATED',
@@ -687,7 +687,7 @@ describe('AI Plant Setup page', () => {
     expect((screen.getByRole('button', { name: 'Terapkan konfigurasi monitoring ke ESP32' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(await screen.findByRole('button', { name: 'Validasi air_temperature oleh saya' }));
     expect(await screen.findByText(/Divalidasi oleh user owner-1/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('checkbox', { name: /Saya menyetujui pengiriman konfigurasi monitoring/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Saya menyetujui pengiriman sensor telemetry dan rentang parameter/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Terapkan konfigurasi monitoring ke ESP32' }));
 
     await waitFor(() => expect(mocks.applyDevicePlantConfiguration).toHaveBeenCalledWith('org-1', 'device-1', expect.objectContaining({

@@ -21,9 +21,14 @@ interface AuthenticatedClientData {
   };
 }
 
+const websocketOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3000')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 @WebSocketGateway({
   cors: {
-    origin: '*',
+    origin: websocketOrigins,
   },
   namespace: '/realtime',
 })
@@ -56,9 +61,8 @@ export class TelemetryGateway implements OnGatewayConnection, OnGatewayDisconnec
     }
 
     try {
-      const jwtSecret = this.config.get<string>('JWT_SECRET') || 'dev_jwt_secret_change_in_production_32chars';
       const payload = await this.jwt.verifyAsync<{ sub: string; type?: string }>(token, {
-        secret: jwtSecret,
+        secret: this.config.getOrThrow<string>('JWT_SECRET'),
       });
 
       if (!payload.sub) {
@@ -192,10 +196,9 @@ export class TelemetryGateway implements OnGatewayConnection, OnGatewayDisconnec
       timestamp: new Date().toISOString(),
     };
 
-    // Emit to specific rooms and general broadcast
+    // Emit only to rooms whose membership was authorized at subscription time.
     this.server.to(`greenhouse:${greenhouseId}`).emit('telemetry:update', packet);
     this.server.to(`device:${deviceMqttId}`).emit('telemetry:update', packet);
-    this.server.emit('telemetry:broadcast', packet);
   }
 
   broadcastStatus(
@@ -214,7 +217,6 @@ export class TelemetryGateway implements OnGatewayConnection, OnGatewayDisconnec
 
     this.server.to(`greenhouse:${greenhouseId}`).emit('status:update', packet);
     this.server.to(`device:${deviceMqttId}`).emit('status:update', packet);
-    this.server.emit('status:broadcast', packet);
   }
 
   broadcastCommandUpdate(update: {

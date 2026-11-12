@@ -46,9 +46,11 @@ describe('MqttService (Unit)', () => {
   let service: MqttService;
   let mockConfigService: Partial<ConfigService>;
   let mockClient: MockMqttClient;
+  let mockEmqxManagement: { provisionUser: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     mockClient = new MockMqttClient();
+    mockEmqxManagement = { provisionUser: vi.fn().mockResolvedValue(undefined) };
 
     mockConfigService = {
       get: vi.fn().mockImplementation((key: string) => {
@@ -66,12 +68,54 @@ describe('MqttService (Unit)', () => {
       }),
     };
 
-    service = new MqttService(mockConfigService as ConfigService);
+    service = new MqttService(mockConfigService as ConfigService, mockEmqxManagement as never);
   });
 
   it('should have disconnected status initially', () => {
     expect(service.isConnected()).toBe(false);
     expect(service.getConnectionStatus()).toBe('disconnected');
+  });
+
+  it('should refuse to start without backend MQTT credentials', async () => {
+    await expect(service.onModuleInit()).rejects.toThrow(/existing EMQX backend account credentials/);
+    expect(mockEmqxManagement.provisionUser).not.toHaveBeenCalled();
+  });
+
+  it('connects with an existing backend account when management API provisioning is not configured', async () => {
+    mockConfigService.get = vi.fn().mockImplementation((key: string) => {
+      const configMap: Record<string, unknown> = {
+        'mqtt.host': 'localhost',
+        'mqtt.port': 1883,
+        'mqtt.protocol': 'mqtt',
+        'mqtt.username': 'nestjs_backend',
+        'mqtt.password': 'test-only-password',
+        'mqtt.clientId': 'test-greenhouse-api',
+        'mqtt.keepalive': 30,
+        'mqtt.connectTimeout': 10000,
+        'mqtt.reconnectPeriod': 3000,
+        'mqtt.clean': true,
+      };
+      return configMap[key];
+    });
+    const connect = vi.spyOn(service, 'connect').mockResolvedValue();
+
+    await service.onModuleInit();
+
+    expect(mockEmqxManagement.provisionUser).not.toHaveBeenCalled();
+    expect(connect).toHaveBeenCalledOnce();
+  });
+
+  it('rejects partial EMQX management API configuration', async () => {
+    mockConfigService.get = vi.fn().mockImplementation((key: string) => ({
+      'mqtt.username': 'nestjs_backend',
+      'mqtt.password': 'test-only-password',
+      'mqtt.managementUrl': 'http://localhost:18083/api/v5',
+    })[key]);
+
+    await expect(service.onModuleInit()).rejects.toThrow(
+      /must be configured together/,
+    );
+    expect(mockEmqxManagement.provisionUser).not.toHaveBeenCalled();
   });
 
   it('should throw an error when publishing while disconnected', async () => {
@@ -127,6 +171,27 @@ describe('MqttService (Unit)', () => {
       raw: topic,
     });
     expect(receivedMessages[0].payload).toEqual({ temperature: 27.2 });
+  });
+
+  it('should restore telemetry subscriptions after MQTT reconnect', () => {
+    (service as unknown as { client: MockMqttClient }).client = mockClient;
+    (service as unknown as { setupEventHandlers: (id: string) => void }).setupEventHandlers('test-client');
+    mockClient.subscribe.mockImplementation((_topics, _options, callback) => callback(null, []));
+
+    mockClient.emit('reconnect');
+    expect(service.getConnectionStatus()).toBe('reconnecting');
+
+    mockClient.emit('connect');
+    expect(service.getConnectionStatus()).toBe('connected');
+    expect(mockClient.subscribe).toHaveBeenCalledTimes(1);
+    expect(mockClient.subscribe.mock.calls[0][0]).toContain('greenhouse/+/+/telemetry');
+
+    mockClient.emit('close');
+    mockClient.emit('reconnect');
+    mockClient.emit('connect');
+
+    expect(mockClient.subscribe).toHaveBeenCalledTimes(2);
+    expect(service.getConnectionStatus()).toBe('connected');
   });
 
   it('should handle disconnect gracefully', async () => {

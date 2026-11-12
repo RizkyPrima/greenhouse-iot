@@ -2,7 +2,7 @@
 
 Panduan operasional dan development backend API serta infrastruktur lokal.
 
-Runbook provisioning platform admin pertama tersedia di [Phase 10.4.2I](phase10-4-2i-platform-admin-bootstrap.md). Provisioning deployment-blocked sampai signer approval tepercaya tersedia; `JWT_SECRET` dan access token aplikasi bukan bukti approval. Verifikasi disposable target dan change-lock tetap prasyarat terpisah untuk integration test.
+Pemilik aktif dari minimal satu organisasi dapat mengelola grant admin sumber riset platform. Hak ini berasal dari membership `OWNER`; tidak ada provisioning admin platform pertama atau signer bootstrap terpisah. Endpoint tetap menolak pengguna nonaktif dan anggota yang hanya berperan `ADMIN`, `OPERATOR`, atau `VIEWER`.
 
 Prosedur migration idempotensi aktivasi zona Phase 10.1B, termasuk verifikasi target dan batasan bahwa `migrate deploy` menjalankan semua migration pending, tersedia di [Phase 10.1B deployment](phase10/PHASE_10_1B_ZONE_IDEMPOTENCY_DEPLOYMENT.md). Migration tersebut belum diterapkan.
 

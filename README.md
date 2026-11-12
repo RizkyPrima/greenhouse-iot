@@ -63,8 +63,8 @@ greenhouse-iot/
 │
 ├── infrastructure/
 │   ├── emqx/
-│   │   ├── emqx.conf        # EMQX override config
-│   │   └── acl.conf         # EMQX ACL rules
+│   │   ├── emqx.conf        # Loopback-only development broker
+│   │   └── emqx.production.conf # TLS-only production broker
 │   └── postgres/
 │       └── init/
 │           └── 01_init.sql  # DB init (extensions)
@@ -88,6 +88,11 @@ greenhouse-iot/
 ├── .gitignore
 └── README.md
 ```
+
+`docker-compose.yml` is for local development. Use
+`docker-compose.production.yml` only with externally managed TLS certificates,
+secret-manager credentials, and the tenant-authorized per-device provisioning
+flow described in [docs/infrastructure.md](docs/infrastructure.md).
 
 ## Implementation Phases
 

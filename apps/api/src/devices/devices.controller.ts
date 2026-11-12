@@ -11,6 +11,7 @@ import { Roles } from '../auth/decorators/roles.decorator.js';
 import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { MqttDeviceProvisioningService } from './mqtt-device-provisioning.service.js';
 
 @ApiTags('Devices')
 @ApiBearerAuth()
@@ -19,7 +20,8 @@ export class DevicesController {
   constructor(
     private readonly devicesService: DevicesService,
     private readonly sensorsService: SensorsService,
-    private readonly actuatorsService: ActuatorsService
+    private readonly actuatorsService: ActuatorsService,
+    private readonly mqttProvisioning: MqttDeviceProvisioningService,
   ) {}
 
   @Roles(UserRole.OWNER, UserRole.ADMIN)
@@ -39,9 +41,19 @@ export class DevicesController {
   }
 
   @Roles(UserRole.OWNER, UserRole.ADMIN)
+  @Post(':id/mqtt-credentials')
+  provisionMqttCredentials(@Param('id') id: string) {
+    return this.mqttProvisioning.provision(id);
+  }
+
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateDeviceDto: UpdateDeviceDto) {
-    return this.devicesService.update(id, updateDeviceDto);
+  update(
+    @Param('id') id: string,
+    @Body() updateDeviceDto: UpdateDeviceDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.devicesService.update(id, updateDeviceDto, user.id);
   }
 
   @Roles(UserRole.OWNER, UserRole.ADMIN)

@@ -87,6 +87,18 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsOptional()
+  EMQX_API_URL?: string;
+
+  @IsString()
+  @IsOptional()
+  EMQX_API_KEY?: string;
+
+  @IsString()
+  @IsOptional()
+  EMQX_API_SECRET?: string;
+
+  @IsString()
+  @IsOptional()
   LLM_API_BASE_URL?: string;
 
   @IsString()
@@ -169,6 +181,21 @@ export function validateEnvironment(config: Record<string, unknown>): Environmen
       .map((err) => Object.values(err.constraints || {}).join(', '))
       .join('; ');
     throw new Error(`[Configuration Error] Environment validation failed: ${errorMessages}`);
+  }
+
+  if (validatedConfig.NODE_ENV === Environment.Production) {
+    if (validatedConfig.MQTT_PROTOCOL !== 'mqtts') {
+      throw new Error('[Configuration Error] MQTT_PROTOCOL must be mqtts in production');
+    }
+    if (!validatedConfig.EMQX_API_URL || new URL(validatedConfig.EMQX_API_URL).protocol !== 'https:') {
+      throw new Error('[Configuration Error] EMQX_API_URL must use HTTPS in production');
+    }
+    if (!validatedConfig.JWT_SECRET || !validatedConfig.JWT_REFRESH_SECRET) {
+      throw new Error('[Configuration Error] JWT_SECRET and JWT_REFRESH_SECRET are required in production');
+    }
+    if (!validatedConfig.CORS_ORIGIN || validatedConfig.CORS_ORIGIN.split(',').some((origin) => origin.trim() === '*')) {
+      throw new Error('[Configuration Error] CORS_ORIGIN must contain explicit origins in production');
+    }
   }
 
   return validatedConfig;

@@ -6,7 +6,7 @@
 
 | Container           | Image                  | Ports (host→container)     | Role                     |
 |---------------------|------------------------|----------------------------|--------------------------|
-| `greenhouse-emqx`   | `emqx/emqx:5.8.6`      | 1883, 8083, 8084, 8883, 18083 | MQTT Broker           |
+| `greenhouse-emqx`   | `emqx/emqx:5.8.6`      | development: loopback 1883/18083; production: configured MQTTS 8883 | MQTT Broker |
 | `greenhouse-postgres` | `postgres:16-alpine`  | 5432→5432                  | Primary Database         |
 | `greenhouse-redis`  | `redis:7.4-alpine`     | 6379→6379                  | Cache & Realtime State   |
 
@@ -14,15 +14,69 @@
 
 ## EMQX
 
+### Development and production
+
+The default `docker-compose.yml` is development-only: MQTT TCP and the dashboard
+are bound to `127.0.0.1`. It requires authenticated MQTT clients and denies
+unmatched topics. It is not reachable by physical devices over the LAN.
+
+The broker-only production deployment uses the separate
+`docker-compose.production.yml` (API, database, and cache are deployed
+separately) and
+`infrastructure/emqx/emqx.production.conf`. It exposes only MQTT over TLS (8883)
+and uses mounted certificate files. Configure a hostname present in the broker
+certificate and use `MQTT_PROTOCOL=mqtts` in the API. Never enable plaintext
+MQTT/WSS or anonymous access in a production override.
+
+Both configs use EMQX built-in password authentication and built-in database
+authorization with `no_match = deny`. The backend client is provisioned at API
+startup; each device receives exact topic rules only through the authenticated
+device provisioning API. Management API keys and passwords must come from a
+secret manager and must not be stored in tracked files.
+
+The API starts only after it can create/update its own broker identity using
+the EMQX Management API. Create the API key after the development broker is
+running, then inject the API URL/key/secret and backend MQTT username/password
+into the API runtime. Production must use HTTPS for this endpoint and MQTTS for
+the broker connection.
+
+### Device provisioning
+
+1. Register the device under its greenhouse using the tenant-authorized device
+   API. Unknown MQTT identities are rejected; telemetry ingestion does not
+   create devices.
+2. An OWNER or ADMIN member of that device's organization calls
+   `POST /api/devices/{deviceDbId}/mqtt-credentials`. The route verifies the tenant
+   membership, registered device, and active greenhouse.
+3. The response contains a newly generated password once. It is not stored in
+   PostgreSQL or logged. A repeat call rotates the password and ACL.
+4. Put the returned `device:{deviceId}` username/password and the broker CA certificate in the
+   device's local, ignored `firmware/esp32_s3_greenhouse/secrets.h`, copied from
+   `secrets.example.h`, then build and deploy that firmware.
+5. Deleting a device, changing its device ID, or moving it to another greenhouse
+   removes its EMQX user/rules. Re-provision after changing identity.
+
+Each device can publish only telemetry/status/event/alarm/response on its
+registered greenhouse/device topic and subscribe only to command/config on
+those same topic paths. The API backend has its own credential and broad
+greenhouse access; do not reuse it on a device.
+
+The EMQX API key used by NestJS must be able to manage built-in authentication
+users and authorization rules. Treat it as highly privileged unless the
+deployed EMQX edition supports a narrower role; restrict its network access and
+store it in a secret manager. In production, set `EMQX_API_URL` to an HTTPS
+endpoint whose certificate is trusted by Node.js.
+When using a private CA, configure Node.js trust (for example
+`NODE_EXTRA_CA_CERTS`) instead of disabling certificate validation.
+
 ### Ports
 
 | Port  | Protocol       | Description                        |
 |-------|----------------|------------------------------------|
-| 1883  | MQTT TCP       | Standard MQTT (plain)              |
-| 8083  | MQTT WebSocket | MQTT over WebSocket (path: `/mqtt`)|
-| 8084  | MQTT WSS       | MQTT over WebSocket (TLS)          |
+| 1883  | MQTT TCP       | Development only; host loopback    |
 | 8883  | MQTT TLS       | MQTT over TLS                      |
-| 18083 | HTTP           | EMQX Dashboard (Web UI)            |
+| 18083 | HTTP           | Development dashboard; host loopback |
+| 18084 | HTTPS          | Production management API inside private network |
 
 ### Dashboard Access
 
@@ -218,10 +272,9 @@ docker exec -it greenhouse-redis redis-cli -a <REDIS_PASSWORD>
 > [!IMPORTANT]
 > The `.env` file contains all credentials. Never commit it to Git.
 
-> [!NOTE]
-> EMQX is configured with `EMQX_AUTHORIZATION__NO_MATCH: allow` for Phase 1 development convenience.
-> In Phase 5, switch to proper authentication (password-based or JWT) and strict ACL rules.
-
-> [!NOTE]
-> TLS/MQTTS (port 8883) and WSS (port 8084) require certificates.
-> These will be configured in the production deployment phase.
+> [!IMPORTANT]
+> The broker intentionally has no anonymous fallback. Startup fails when its
+> dashboard password or node cookie is absent. Never expose the development
+> broker port; use the TLS-only production Compose file for devices. Existing
+> firmware configured for anonymous/plaintext MQTT will stop connecting until
+> it is re-provisioned with per-device credentials and the broker CA.

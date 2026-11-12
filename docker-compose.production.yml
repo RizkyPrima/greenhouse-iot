@@ -1,0 +1,40 @@
+name: greenhouse-production
+
+services:
+  emqx:
+    image: emqx/emqx:5.8.6
+    container_name: greenhouse-emqx-production
+    restart: unless-stopped
+    environment:
+      EMQX_NAME: greenhouse-emqx
+      EMQX_HOST: 127.0.0.1
+      EMQX_NODE__COOKIE: ${EMQX_NODE_COOKIE:?Set EMQX_NODE_COOKIE from a secret manager}
+      EMQX_DASHBOARD__DEFAULT_USERNAME: ${EMQX_DASHBOARD_DEFAULT_USERNAME:-admin}
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: ${EMQX_DASHBOARD_DEFAULT_PASSWORD:?Set EMQX_DASHBOARD_DEFAULT_PASSWORD from a secret manager}
+    ports:
+      - "${EMQX_MQTTS_BIND_ADDRESS:-0.0.0.0}:${EMQX_MQTTS_PORT:-8883}:8883"
+    volumes:
+      - ./infrastructure/emqx/emqx.production.conf:/opt/emqx/etc/emqx.conf:ro
+      - ${EMQX_TLS_CERT_FILE:?Set EMQX_TLS_CERT_FILE to a TLS certificate file}:/opt/emqx/etc/certs/server.pem:ro
+      - ${EMQX_TLS_KEY_FILE:?Set EMQX_TLS_KEY_FILE to a TLS private key file}:/opt/emqx/etc/certs/server-key.pem:ro
+      - emqx_data:/opt/emqx/data
+      - emqx_log:/opt/emqx/log
+    networks:
+      - greenhouse-network
+    healthcheck:
+      test: ["CMD", "emqx", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  emqx_data:
+    name: greenhouse_emqx_production_data
+  emqx_log:
+    name: greenhouse_emqx_production_log
+
+networks:
+  greenhouse-network:
+    name: greenhouse-production-network
+    driver: bridge

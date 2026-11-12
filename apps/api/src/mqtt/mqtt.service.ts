@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import mqtt, { MqttClient } from 'mqtt';
+import { EmqxManagementService } from './emqx-management.service.js';
 import {
   DEFAULT_MQTT_SUBSCRIPTIONS,
   parseGreenhouseTopic,
@@ -25,9 +26,43 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   private readonly messageHandlers = new Set<MqttMessageHandler>();
   private readonly activeSubscriptions = new Set<string>(DEFAULT_MQTT_SUBSCRIPTIONS);
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly emqxManagement: EmqxManagementService,
+  ) {}
 
   async onModuleInit(): Promise<void> {
+    const username = this.configService.get<string>('mqtt.username');
+    const password = this.configService.get<string>('mqtt.password');
+    if (!username?.trim() || !password) {
+      throw new Error(
+        'MQTT_USERNAME and MQTT_PASSWORD are required; set the existing EMQX backend account credentials. Anonymous connections remain disabled.',
+      );
+    }
+    if (username.startsWith('device:')) {
+      throw new Error('MQTT_USERNAME is reserved for backend identity and cannot use the device: prefix');
+    }
+
+    const managementSettings = [
+      this.configService.get<string>('mqtt.managementUrl'),
+      this.configService.get<string>('mqtt.managementKey'),
+      this.configService.get<string>('mqtt.managementSecret'),
+    ];
+    const configuredManagementSettings = managementSettings.filter(Boolean).length;
+    if (configuredManagementSettings === managementSettings.length) {
+      await this.emqxManagement.provisionUser(username, password, [
+        { permission: 'allow', action: 'all', topic: 'greenhouse/#' },
+      ]);
+    } else if (configuredManagementSettings === 0) {
+      this.logger.warn(
+        '[MQTT_PROVISIONING_SKIPPED] EMQX Management API credentials are absent; will authenticate using the configured existing MQTT account',
+      );
+    } else {
+      throw new Error(
+        'EMQX_API_URL, EMQX_API_KEY, and EMQX_API_SECRET must be configured together',
+      );
+    }
+
     await this.connect();
   }
 
@@ -43,8 +78,11 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     const host = this.configService.get<string>('mqtt.host') || 'localhost';
     const port = this.configService.get<number>('mqtt.port') || 1883;
     const protocol = this.configService.get<string>('mqtt.protocol') || 'mqtt';
-    const username = this.configService.get<string>('mqtt.username') || undefined;
-    const password = this.configService.get<string>('mqtt.password') || undefined;
+    const username = this.configService.get<string>('mqtt.username');
+    const password = this.configService.get<string>('mqtt.password');
+    if (!username?.trim() || !password) {
+      throw new Error('MQTT_USERNAME and MQTT_PASSWORD are required; anonymous backend connections are disabled');
+    }
     const baseClientId = this.configService.get<string>('mqtt.clientId') || 'greenhouse-api';
     const clientId = `${baseClientId}-${Math.random().toString(36).substring(2, 7)}`;
     const keepalive = this.configService.get<number>('mqtt.keepalive') || 30;
@@ -66,12 +104,8 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         reconnectPeriod,
       };
 
-      if (username) {
-        connectOptions.username = username;
-      }
-      if (password) {
-        connectOptions.password = password;
-      }
+      connectOptions.username = username;
+      connectOptions.password = password;
 
       this.client = mqtt.connect(brokerUrl, connectOptions);
       this.setupEventHandlers(clientId);

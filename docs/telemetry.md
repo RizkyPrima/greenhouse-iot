@@ -89,29 +89,39 @@ ESP32-S3. This is a separate protocol from actuator commands:
 - API publishes to `greenhouse/{greenhouseCode}/{deviceId}/config` at QoS 1, without retain.
 - Firmware only subscribes to `/config`; the existing ON/OFF handler remains subscribed only to
   `/command`.
-- A monitoring payload uses `schema: "plant-monitoring/v1"`, `mode: "monitoring_only"`, a unique
+- A monitoring payload uses `schema: "plant-monitoring/v2"`, `mode: "monitoring_only"`, a unique
   `configurationId`, increasing per-device `version`, the published `catalogVersionId`, parameter
-  keys, and an allowlisted sensor-code list. It contains no actuator fields.
-- Firmware validates the schema and sensor mapping, stores the selection in NVS, then sends
+  keys, and an allowlisted sensor-code list. It may also contain reviewed numeric `operatingRanges`
+  (`parameterKey`, `minimum`, `maximum`, and catalog `unit`), including targets such as nutrient
+  solution pH that are not yet sensor channels. It contains no actuator fields.
+- Firmware validates the schema, sensor mapping, and ranges, stores them in NVS, then sends
   `RECEIVED` and `APPLIED` acknowledgements on `/response` with `type: "plant_config"`.
 - API state distinguishes `PUBLISHING`, `SENT`, `RECEIVED`, `APPLIED`, `REJECTED`, `TIMEOUT`, and
   `FAILED`. A successful broker publish is not an applied-device acknowledgement.
 
-The current firmware exposes `temperature`, `humidity`, `soil_moisture`, and `light_intensity`.
+Operating ranges are stored as reviewed guidance only; this firmware does not read pH, compare live
+measurements against the ranges, trigger alarms, or control actuators from them. The current firmware
+exposes `temperature`, `humidity`, `soil_moisture`, and `light_intensity`.
 The backend maps catalog keys `air_temperature`, `relative_humidity`, `soil_moisture`, and
 `light_intensity`; its telemetry unit is `lux`. AI Plant Setup includes `light_intensity` as a
 candidate parameter and fixes its displayed unit to `lux`. Firmware reports simulated light readings
 by default and sets `sensorDataMode` from `USE_PHYSICAL_SENSORS`; when physical sensors are enabled,
 the LDR conversion is only an estimate and must not be treated as calibrated lux without
 hardware-specific calibration. Other catalog parameters (including pH, TDS, and water temperature)
-are rejected until firmware and registered sensor support exist. `sensorDataMode: "SIMULATED"` is
+remain unavailable as telemetry channels until firmware and registered sensor support exist, though
+reviewed numeric ranges can be delivered as guidance. `sensorDataMode: "SIMULATED"` is
 not evidence that physical sensors are installed or calibrated.
 
-Firmware `1.1.0-esp32s3` advertises `capabilities.plantConfiguration: "plant-monitoring/v1"` on
-every `/status` heartbeat and subscribes to the separate `/config` topic. Source code changes do
-not update a controller already in service: compile and upload
-`firmware/esp32_s3_greenhouse/esp32_s3_greenhouse.ino` to the ESP32-S3, reconnect it to MQTT, and
-wait for a fresh heartbeat. Confirm the reported firmware is `1.1.0-esp32s3` and the monitoring
+Firmware `1.2.0-esp32s3` advertises `capabilities.plantConfiguration: "plant-monitoring/v2"` and
+`capabilities.operatingRanges: true` on
+every `/status` heartbeat and subscribes to the separate `/config` topic. Build and upload the
+`.ino` sketch using Arduino IDE as described in `firmware/esp32_s3_greenhouse/README.md`. Source
+code changes do not update a controller already in service: upload the sketch to the ESP32-S3,
+reconnect it to MQTT, and
+wait for a fresh heartbeat. On first boot or when saved Wi-Fi credentials no longer connect, join
+the `Greenhouse-<DEVICE_ID>` setup access point; its one-boot password is printed to the serial
+monitor. Use the captive portal to select the 2.4 GHz Wi-Fi network. WiFiManager saves credentials
+in ESP32 storage for later boots. Confirm the reported firmware is `1.2.0-esp32s3` and the monitoring
 capability is present before applying configuration. If the device still shows an older firmware
 or no capability, verify the flashed board, MQTT greenhouse/device identifiers, broker connection,
 and that `/status` messages from that device reach the API. No monitoring configuration is sent

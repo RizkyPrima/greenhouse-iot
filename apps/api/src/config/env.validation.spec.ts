@@ -42,4 +42,30 @@ describe('validateEnvironment', () => {
 
     expect(() => validateEnvironment(config)).toThrowError(/API_PORT/);
   });
+
+  it('requires secure MQTT and management URLs in production', () => {
+    expect(() => validateEnvironment({
+      DATABASE_URL: '******localhost:5432/db',
+      NODE_ENV: 'production',
+      MQTT_PROTOCOL: 'mqtt',
+      EMQX_API_URL: 'http://broker.example/api/v5',
+    })).toThrowError(/MQTT_PROTOCOL must be mqtts/);
+
+    expect(() => validateEnvironment({
+      DATABASE_URL: '******localhost:5432/db',
+      NODE_ENV: 'production',
+      MQTT_PROTOCOL: 'mqtts',
+      EMQX_API_URL: 'http://broker.example/api/v5',
+    })).toThrowError(/EMQX_API_URL must use HTTPS/);
+
+    expect(() => validateEnvironment({
+      DATABASE_URL: '******localhost:5432/db',
+      NODE_ENV: 'production',
+      MQTT_PROTOCOL: 'mqtts',
+      EMQX_API_URL: 'https://broker.example/api/v5',
+      JWT_SECRET: 'test-secret',
+      JWT_REFRESH_SECRET: 'test-refresh-secret',
+      CORS_ORIGIN: '*',
+    })).toThrowError(/CORS_ORIGIN must contain explicit origins/);
+  });
 });

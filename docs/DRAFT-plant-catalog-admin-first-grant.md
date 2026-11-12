@@ -8,7 +8,7 @@
 
 Rancangan ini membahas hanya penerbitan grant platform pertama dengan permission `PLANT_CATALOG_ADMIN`. Grant tersebut membuka akses ke operasi platform-admin katalog yang dijaga `PlatformAdminGuard`. Rancangan ini tidak membuat pengguna, tidak mengubah role organisasi, dan tidak mencakup grant permission lain.
 
-`RESEARCH_SOURCE_GRANT_ADMIN` adalah permission berbeda dengan bootstrap dan runbook tersendiri (`phase10-4-2i-platform-admin-bootstrap.md`). Script dan prosedur tersebut tidak membuat grant katalog dan tidak boleh dipakai sebagai jalan pintas. Runbook itu juga menyatakan signer approval tepercaya belum tersedia; JWT akses aplikasi biasa maupun `JWT_SECRET` bukan approval yang dapat dipercaya.
+Pengelolaan grant sumber riset sekarang diizinkan untuk pemilik aktif dari organisasi mana pun; tidak ada bootstrap `RESEARCH_SOURCE_GRANT_ADMIN` terpisah. Ini tidak memberikan `PLANT_CATALOG_ADMIN`: grant katalog tetap merupakan permission platform yang berbeda dan prosedur bootstrap katalog pada dokumen ini belum tersedia.
 
 ## Status implementasi dan keputusan terbuka
 

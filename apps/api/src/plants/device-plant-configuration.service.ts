@@ -22,7 +22,7 @@ const PARAMETER_SENSOR_CODES: Record<string, string> = {
   soil_moisture: 'soil_moisture',
   light_intensity: 'light_intensity',
 };
-const CAPABILITY_SCHEMA = 'plant-monitoring/v1';
+const CAPABILITY_SCHEMA = 'plant-monitoring/v2';
 const DEVICE_ONLINE_WINDOW_MS = 30_000;
 const ACK_TIMEOUT_MS = 60_000;
 
@@ -114,7 +114,8 @@ export class DevicePlantConfigurationService {
       const existingPayload = isRecord(existing.payload) ? existing.payload : {};
       if (existing.catalogVersionId !== input.catalogVersionId
         || !Array.isArray(existingPayload.parameterKeys)
-        || JSON.stringify(existingPayload.parameterKeys) !== JSON.stringify(input.parameterKeys)) {
+        || JSON.stringify(existingPayload.parameterKeys) !== JSON.stringify(input.parameterKeys)
+        || JSON.stringify(existingPayload.operatingRanges ?? []) !== JSON.stringify(input.operatingRanges ?? [])) {
         throw new ConflictException('Configuration id was reused with different catalog parameters.');
       }
       if (existing.status === DevicePlantConfigurationStatus.PENDING) {
@@ -161,7 +162,7 @@ export class DevicePlantConfigurationService {
     const capability = isRecord(rawStatus.capabilities) ? rawStatus.capabilities : {};
     const reportedAt = latestStatus?.receivedAt?.getTime() ?? 0;
     if (capability.plantConfiguration !== CAPABILITY_SCHEMA || Date.now() - reportedAt > DEVICE_ONLINE_WINDOW_MS) {
-      throw new ConflictException('Device firmware has not reported support for plant-monitoring/v1 recently. Update its firmware and wait for a fresh heartbeat.');
+      throw new ConflictException('Device firmware has not reported support for plant-monitoring/v2 recently. Update its firmware and wait for a fresh heartbeat.');
     }
     if (capability.sensorDataMode !== 'PHYSICAL' && capability.sensorDataMode !== 'SIMULATED') {
       throw new ConflictException('Device has not reported whether its sensor readings are physical or simulated.');
@@ -192,7 +193,34 @@ export class DevicePlantConfigurationService {
     }
 
     const selectedDefinitions = input.parameterKeys.map((key) => definitions.get(key)!);
-    await this.assertParameterDefinitionsUserValidated(organizationId, selectedDefinitions);
+    const operatingRanges = input.operatingRanges ?? [];
+    const rangeKeys = new Set<string>();
+    for (const range of operatingRanges) {
+      if (rangeKeys.has(range.parameterKey) || !Number.isFinite(range.minimum) || !Number.isFinite(range.maximum)
+        || range.minimum > range.maximum || !range.unit.trim()) {
+        throw new BadRequestException(`Invalid or duplicate operating range for ${range.parameterKey}.`);
+      }
+      rangeKeys.add(range.parameterKey);
+      const definition = definitions.get(range.parameterKey);
+      if (!definition || definition.dataType !== 'number' || definition.unit !== range.unit) {
+        throw new UnprocessableEntityException({
+          code: 'DEVICE_OPERATING_RANGE_INVALID',
+          message: 'Operating ranges must match a numeric parameter and its published catalog unit.',
+          parameterKey: range.parameterKey,
+        });
+      }
+      const schema = isRecord(definition.valueSchema) ? definition.valueSchema : {};
+      if (typeof schema.minimum === 'number' && range.minimum < schema.minimum
+        || typeof schema.maximum === 'number' && range.maximum > schema.maximum) {
+        throw new UnprocessableEntityException({
+          code: 'DEVICE_OPERATING_RANGE_OUTSIDE_SCHEMA',
+          message: 'Operating range falls outside the published numeric parameter schema.',
+          parameterKey: range.parameterKey,
+        });
+      }
+    }
+    const rangeDefinitions = operatingRanges.map(({ parameterKey }) => definitions.get(parameterKey)!);
+    await this.assertParameterDefinitionsUserValidated(organizationId, [...selectedDefinitions, ...rangeDefinitions]);
 
     const sensorCodes = input.parameterKeys.map((key) => PARAMETER_SENSOR_CODES[key]);
     const reportedSensorCodes = new Set(
@@ -223,6 +251,12 @@ export class DevicePlantConfigurationService {
       catalogVersionId: catalogVersion.id,
       parameterKeys: input.parameterKeys,
       sensorCodes,
+      operatingRanges: operatingRanges.map(({ parameterKey, minimum, maximum, unit }) => ({
+        parameterKey,
+        minimum,
+        maximum,
+        unit,
+      })),
     };
     let delivery;
     try {

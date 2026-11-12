@@ -10,6 +10,7 @@
 # Environment dan secrets
 .env.*
 !.env.example
+/firmware/esp32_s3_greenhouse/secrets.h
 
 # Node.js
 node_modules/
@@ -76,5 +77,4 @@ coverage/
 # Local databases
 *.sqlite
 *.db
-
 

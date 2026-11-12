@@ -14,7 +14,10 @@ async function bootstrap(): Promise<void> {
   const configService = app.get(ConfigService);
   const host = configService.get<string>('app.host') || '0.0.0.0';
   const port = configService.get<number>('app.port') || 3001;
-  const corsOrigin = configService.get<string>('app.corsOrigin') || 'http://localhost:3000';
+  const corsOrigins = (configService.get<string>('app.corsOrigin') || 'http://localhost:3000')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 
   // Enable graceful shutdown hooks (SIGTERM, SIGINT)
   app.enableShutdownHooks();
@@ -24,7 +27,7 @@ async function bootstrap(): Promise<void> {
 
   // CORS Configuration
   app.enableCors({
-    origin: corsOrigin,
+    origin: corsOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'Idempotency-Key'],
@@ -63,7 +66,7 @@ async function bootstrap(): Promise<void> {
   logger.log(`Greenhouse API is running on: http://${host}:${port}/api`);
   logger.log(`Health Check endpoint     : http://${host}:${port}/api/health`);
   logger.log(`Swagger Documentation     : http://${host}:${port}/api/docs`);
-  logger.log(`CORS allowed origin       : ${corsOrigin}`);
+  logger.log(`CORS allowed origins      : ${corsOrigins.join(', ')}`);
   logger.log(`======================================================`);
 }
 

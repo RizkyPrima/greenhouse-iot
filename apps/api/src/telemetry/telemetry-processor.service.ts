@@ -97,6 +97,9 @@ export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy 
       return;
     }
 
+    const device = await this.resolveDeviceForTopic(greenhouseId, deviceMqttId);
+    if (!device) return;
+
     const now = new Date().toISOString();
 
     let isDuplicate = false;
@@ -162,10 +165,11 @@ export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy 
     }
 
     // Fire-and-forget — never blocks realtime path
-    this.persistTelemetryAsync(greenhouseId, deviceMqttId, validated, rawPayload);
+    this.persistTelemetryAsync(device, greenhouseId, deviceMqttId, validated, rawPayload);
   }
 
   private persistTelemetryAsync(
+    device: { id: string; greenhouseId: string },
     greenhouseId: string,
     deviceMqttId: string,
     payload: TelemetryPayload,
@@ -173,14 +177,6 @@ export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy 
   ): void {
     void (async () => {
       try {
-        const device = await this.persistence.resolveDevice(deviceMqttId);
-        if (!device) {
-          this.logger.warn(
-            `[PERSIST_SKIP] Device "${deviceMqttId}" not registered in DB — telemetry data skipped for persistence`,
-          );
-          return;
-        }
-
         const codes = payload.sensors.map((s: SensorReading) => s.code);
         const sensorMap = await this.persistence.resolveSensors(device.id, codes);
 
@@ -213,6 +209,9 @@ export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy 
       return;
     }
 
+    const device = await this.resolveDeviceForTopic(greenhouseId, deviceMqttId);
+    if (!device) return;
+
     const now = new Date().toISOString();
 
     // ── 1. REALTIME PATH ───────────────────────────────────────────────────
@@ -227,10 +226,11 @@ export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy 
     }
 
     // ── 2. PERSISTENCE PATH ────────────────────────────────────────────────
-    this.persistStatusAsync(greenhouseId, deviceMqttId, validated, rawPayload);
+    this.persistStatusAsync(device, greenhouseId, deviceMqttId, validated, rawPayload);
   }
 
   private persistStatusAsync(
+    device: { id: string; greenhouseId: string },
     greenhouseId: string,
     deviceMqttId: string,
     payload: StatusPayload,
@@ -238,9 +238,8 @@ export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy 
   ): void {
     void (async () => {
       try {
-        const device = await this.persistence.resolveDevice(deviceMqttId);
         await this.persistence.persistDeviceStatus(
-          device?.id ?? null,
+          device.id,
           deviceMqttId,
           greenhouseId,
           payload,
@@ -251,6 +250,23 @@ export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy 
         this.logger.error(`[PERSIST_STATUS_ERROR] device=${deviceMqttId}: ${msg}`);
       }
     })();
+  }
+
+  private async resolveDeviceForTopic(
+    greenhouseId: string,
+    deviceMqttId: string,
+  ): Promise<{ id: string; greenhouseId: string } | null> {
+    try {
+      const device = await this.persistence.resolveDevice(deviceMqttId, greenhouseId);
+      if (!device) {
+        this.logger.warn(`[DEVICE_IDENTITY_UNVERIFIED] device=${deviceMqttId} greenhouse=${greenhouseId}`);
+      }
+      return device;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`[DEVICE_IDENTITY_ERROR] device=${deviceMqttId}: ${msg}`);
+      return null;
+    }
   }
 
   // ─── Validators ──────────────────────────────────────────────────────────────
@@ -282,8 +298,10 @@ export class TelemetryProcessorService implements OnModuleInit, OnModuleDestroy 
 
     if (sensors.length === 0) return null;
 
-    let ts = typeof p['ts'] === 'number' ? p['ts'] : undefined;
-    if (ts) {
+    let ts = typeof p['ts'] === 'number' && Number.isFinite(p['ts']) && p['ts'] >= 1_000_000_000_000
+      ? p['ts']
+      : undefined;
+    if (ts !== undefined) {
       const nowMs = Date.now();
       // Tolerance: timestamp cannot be more than 1 hour in the future
       if (ts > nowMs + 3600000) {

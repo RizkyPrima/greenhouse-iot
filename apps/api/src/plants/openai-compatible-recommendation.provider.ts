@@ -2,7 +2,7 @@ import { BadGatewayException, GatewayTimeoutException, HttpException, Injectable
 import { ConfigService } from '@nestjs/config';
 import type { PlantRecommendationGeneration, PlantRecommendationProvider } from './plant-recommendation-provider.js';
 
-const RECOMMENDATION_TOTAL_TIMEOUT_MS = 120_000;
+const RECOMMENDATION_TOTAL_TIMEOUT_MS = 60_000;
 const RECOMMENDATION_PROVIDER_TIMEOUT_MS = 30_000;
 const PROVIDERS = {
   GEMINI: {

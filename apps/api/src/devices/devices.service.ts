@@ -1,11 +1,18 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { AuthorizationService } from '../auth/authorization.service.js';
 import { CreateDeviceDto } from './dto/create-device.dto.js';
 import { UpdateDeviceDto } from './dto/update-device.dto.js';
+import { MqttDeviceProvisioningService } from './mqtt-device-provisioning.service.js';
 
 @Injectable()
 export class DevicesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mqttProvisioning: MqttDeviceProvisioningService,
+    private readonly authorization: AuthorizationService,
+  ) {}
 
   async create(createDeviceDto: CreateDeviceDto) {
     const gh = await this.prisma.greenhouse.findUnique({ where: { id: createDeviceDto.greenhouseId } });
@@ -45,13 +52,48 @@ export class DevicesService {
     return device;
   }
 
-  async update(id: string, updateDeviceDto: UpdateDeviceDto) {
-    await this.findOne(id);
+  async update(id: string, updateDeviceDto: UpdateDeviceDto, userId: string) {
+    const device = await this.findOne(id);
+    const targetGreenhouseId = updateDeviceDto.greenhouseId ?? device.greenhouseId;
+    if (updateDeviceDto.greenhouseId !== undefined) {
+      const targetGreenhouse = await this.prisma.greenhouse.findFirst({
+        where: { id: targetGreenhouseId, deletedAt: null },
+        select: { id: true, organizationId: true },
+      });
+      if (!targetGreenhouse) throw new NotFoundException('Greenhouse not found');
+      await this.authorization.requireRole(userId, targetGreenhouse.organizationId, [
+        UserRole.OWNER,
+        UserRole.ADMIN,
+      ]);
+    }
+
+    if (updateDeviceDto.zoneId !== undefined) {
+      const zone = await this.prisma.zone.findFirst({
+        where: { id: updateDeviceDto.zoneId, greenhouseId: targetGreenhouseId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!zone) throw new ConflictException('Zone does not belong to the greenhouse or does not exist');
+    } else if (updateDeviceDto.greenhouseId !== undefined && device.zoneId) {
+      const existingZone = await this.prisma.zone.findFirst({
+        where: { id: device.zoneId, greenhouseId: targetGreenhouseId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!existingZone) {
+        throw new ConflictException('Clear or replace the device zone before moving it to another greenhouse');
+      }
+    }
+
     if (updateDeviceDto.deviceId) {
       const existing = await this.prisma.device.findFirst({
         where: { deviceId: updateDeviceDto.deviceId, id: { not: id } },
       });
       if (existing) throw new ConflictException('Device ID already exists');
+    }
+    if (
+      (updateDeviceDto.deviceId && updateDeviceDto.deviceId !== device.deviceId) ||
+      (updateDeviceDto.greenhouseId && updateDeviceDto.greenhouseId !== device.greenhouseId)
+    ) {
+      await this.mqttProvisioning.revoke(device.deviceId);
     }
     return this.prisma.device.update({
       where: { id },
@@ -60,7 +102,8 @@ export class DevicesService {
   }
 
   async remove(id: string) {
-    await this.findOne(id);
+    const device = await this.findOne(id);
+    await this.mqttProvisioning.revoke(device.deviceId);
     return this.prisma.device.update({
       where: { id },
       data: { deletedAt: new Date() },

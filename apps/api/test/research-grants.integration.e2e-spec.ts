@@ -215,12 +215,13 @@ describe('Research grant management HTTP integration (isolated PostgreSQL)', () 
   beforeEach(async () => {
     actor = await createUser('grant-admin');
     recipient = await createUser('recipient');
-    await prisma.platformAdminGrant.create({
-      data: {
-        userId: actor.id,
-        permission: 'RESEARCH_SOURCE_GRANT_ADMIN',
-        grantedByUserId: null,
-      },
+    const organization = await prisma.organization.create({
+      data: { name: `Research grant owner ${randomUUID()}`, slug: `research-owner-${randomUUID()}` },
+      select: { id: true },
+    });
+    testOrganizationIds.add(organization.id);
+    await prisma.organizationMembership.create({
+      data: { userId: actor.id, organizationId: organization.id, role: UserRole.OWNER },
     });
     actorToken = await issueToken(actor.id);
   });
@@ -252,7 +253,7 @@ describe('Research grant management HTTP integration (isolated PostgreSQL)', () 
     await app?.close();
   });
 
-  it('requires authentication and a dedicated grant-management permission', async () => {
+  it('requires authentication and an organization owner for grant management', async () => {
     await request(app.getHttpServer()).post(API_PATH).send({ userId: recipient.id }).expect(401);
 
     const catalogOnly = await createUser('catalog-only');
@@ -277,6 +278,16 @@ describe('Research grant management HTTP integration (isolated PostgreSQL)', () 
     await request(app.getHttpServer())
       .post(API_PATH)
       .set(auth(await issueToken(tenantOwner.id)))
+      .send({ userId: recipient.id })
+      .expect(201);
+
+    const tenantAdmin = await createUser('tenant-admin');
+    await prisma.organizationMembership.create({
+      data: { userId: tenantAdmin.id, organizationId: organization.id, role: UserRole.ADMIN },
+    });
+    await request(app.getHttpServer())
+      .post(API_PATH)
+      .set(auth(await issueToken(tenantAdmin.id)))
       .send({ userId: recipient.id })
       .expect(403);
   });

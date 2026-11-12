@@ -290,7 +290,7 @@ class ApiClient {
   async applyDevicePlantConfiguration(
     organizationId: string,
     deviceId: string,
-    payload: { configurationId: string; catalogVersionId: string; parameterKeys: string[] },
+    payload: { configurationId: string; catalogVersionId: string; parameterKeys: string[]; operatingRanges?: Array<{ parameterKey: string; minimum: number; maximum: number; unit: string }> },
   ): Promise<DevicePlantConfigurationDelivery> {
     return this.request<DevicePlantConfigurationDelivery>(`/organizations/${encodeURIComponent(organizationId)}/devices/${encodeURIComponent(deviceId)}/plant-configurations`, {
       method: 'POST',

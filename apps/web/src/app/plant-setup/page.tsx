@@ -18,6 +18,7 @@ import type {
   PlantProfile,
   PlantSetupCandidateResult,
   DevicePlantConfigurationDelivery,
+  RealtimeDeviceState,
 } from '@/types';
 
 type SetupForm = {
@@ -363,6 +364,13 @@ export default function PlantSetupPage() {
     enabled: Boolean(organizationId && canManage),
     refetchInterval: 10_000,
   });
+  const selectedDevice = devicesQuery.data?.find((device) => device.id === selectedDeviceId);
+  const deviceTelemetryQuery = useQuery({
+    queryKey: ['plant-config-device-telemetry', organizationId, selectedDevice?.deviceId],
+    queryFn: () => apiClient.getDeviceRealtime(selectedDevice!.deviceId),
+    enabled: Boolean(organizationId && selectedDevice?.deviceId),
+    refetchInterval: 5_000,
+  });
   const parameterValidationsQuery = useQuery({
     queryKey: ['plant-catalog-parameter-validations', organizationId, setupDraft?.catalogVersionId],
     queryFn: () => apiClient.getPlantCatalogParameterValidations(organizationId!, setupDraft!.catalogVersionId),
@@ -440,10 +448,7 @@ export default function PlantSetupPage() {
     };
     try {
       const storageKey = `plant-setup-review:${organizationId}`;
-      if (setupDraft?.status === 'PUBLISHED') {
-        sessionStorage.removeItem(storageKey);
-        return;
-      }
+      // Keep reviewed ranges available through the post-publication device delivery step.
       sessionStorage.setItem(storageKey, JSON.stringify(snapshot));
     } catch {
       setDraftError('Browser tidak dapat menyimpan hasil review sementara. Nilai AI belum disimpan ke standar.');
@@ -760,10 +765,20 @@ export default function PlantSetupPage() {
       const parameterKeys = selectedParameterKeys.filter((key) => validatedKeys.has(key)
         && selectedDevice.capability.supportedParameterKeys.includes(key));
       if (!parameterKeys.length) throw new Error('Validasi dan pilih setidaknya satu parameter yang didukung firmware dan sensor.');
+      const operatingRanges = parameters
+        .filter((parameter) => validatedKeys.has(parameter.parameterKey)
+          && parameter.minimumValue !== null && parameter.maximumValue !== null && parameter.unit.trim())
+        .map((parameter) => ({
+          parameterKey: parameter.parameterKey,
+          minimum: parameter.minimumValue!,
+          maximum: parameter.maximumValue!,
+          unit: parameter.unit.trim(),
+        }));
       return apiClient.applyDevicePlantConfiguration(organizationId, selectedDevice.id, {
         configurationId: crypto.randomUUID(),
         catalogVersionId: setupDraft.catalogVersionId,
         parameterKeys,
+        operatingRanges,
       });
     },
     onSuccess: async (delivery) => {
@@ -967,8 +982,14 @@ export default function PlantSetupPage() {
     if (!window.confirm(confirmation)) return;
     deleteDraft.mutate();
   }
-  const selectedDevice = devicesQuery.data?.find((device) => device.id === selectedDeviceId);
   const deviceDelivery = deviceConfigurationQuery.data;
+  const deviceTelemetry: RealtimeDeviceState | null = deviceTelemetryQuery.data?.data ?? null;
+  const latestTelemetryAt = deviceTelemetry?.lastTelemetryAt ?? null;
+  const telemetryIsFresh = Boolean(latestTelemetryAt && Date.now() - Date.parse(latestTelemetryAt) <= 20_000);
+  const telemetryReadings = Object.values(deviceTelemetry?.sensors ?? {})
+    .sort((left, right) => left.sensorCode.localeCompare(right.sensorCode));
+  const telemetryAfterConfiguration = Boolean(deviceDelivery?.sentAt && latestTelemetryAt
+    && Date.parse(latestTelemetryAt) >= Date.parse(deviceDelivery.sentAt));
   const validationsByKey = new Map((parameterValidationsQuery.data ?? []).map((validation) => [validation.parameterKey, validation]));
   const validatedParameterKeys = new Set((parameterValidationsQuery.data ?? [])
     .filter(({ validated }) => validated)
@@ -982,7 +1003,7 @@ export default function PlantSetupPage() {
       && draftSaved
       && immutableSetup
       && selectedDevice?.status === 'ONLINE'
-      && selectedDevice.capability.schema === 'plant-monitoring/v1'
+      && selectedDevice.capability.schema === 'plant-monitoring/v2'
       && selectedParameterKeys.some((key) => validatedParameterKeys.has(key)
         && selectedDevice.capability.supportedParameterKeys.includes(key))
       && deviceApplyConfirmed
@@ -1253,10 +1274,10 @@ export default function PlantSetupPage() {
               {selectedDevice.status} · heartbeat {selectedDevice.lastSeenAt ? new Date(selectedDevice.lastSeenAt).toLocaleString() : 'belum ada'}
             </p>
           </div>
-          {selectedDevice.capability.schema !== 'plant-monitoring/v1'
+          {selectedDevice.capability.schema !== 'plant-monitoring/v2'
             ? <div role="alert" className="space-y-1 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-sm text-amber-100">
               <p>Perangkat belum mengiklankan dukungan konfigurasi monitoring pada heartbeat terakhir. Versi terdeteksi: {selectedDevice.firmwareVersion ?? 'tidak diketahui'} · heartbeat: {selectedDevice.lastSeenAt ? new Date(selectedDevice.lastSeenAt).toLocaleString() : 'belum ada'}.</p>
-              <p className="text-xs text-amber-200">Firmware 1.1.0 atau lebih baru diperlukan. Upload firmware dari folder <code>firmware/esp32_s3_greenhouse</code> ke ESP32, pastikan perangkat tersambung ke broker, lalu tunggu heartbeat berikutnya. Tidak ada konfigurasi yang dikirim sebelum dukungan terdeteksi.</p>
+              <p className="text-xs text-amber-200">Firmware 1.2.0 atau lebih baru diperlukan. Upload firmware dari folder <code>firmware/esp32_s3_greenhouse</code> ke ESP32, pastikan perangkat tersambung ke broker, lalu tunggu heartbeat berikutnya. Tidak ada konfigurasi yang dikirim sebelum dukungan terdeteksi.</p>
             </div>
             : <>
               {selectedDevice.capability.sensorDataMode === 'SIMULATED' && <p className="rounded border border-amber-500/20 bg-amber-500/10 p-2 text-xs text-amber-200">Firmware melaporkan data sensor SIMULASI, bukan pembacaan sensor fisik. Konfigurasi ini tidak membuktikan sensor fisik terpasang atau terkalibrasi.</p>}
@@ -1296,12 +1317,34 @@ export default function PlantSetupPage() {
           <p className="mt-1 text-xs text-slate-300">Konfigurasi v{deviceDelivery.version} · broker publish {deviceDelivery.sentAt ? 'terkonfirmasi' : 'belum terkonfirmasi'} · ACK perangkat {deviceDelivery.receivedAt ? 'diterima' : 'belum diterima'} · penerapan {deviceDelivery.appliedAt ? 'dikonfirmasi ESP32' : 'belum dikonfirmasi'}.</p>
           {deviceDelivery.error && <p className="mt-1 text-xs text-rose-200">{deviceDelivery.error}</p>}
         </div>}
+        {selectedDevice && <div
+          role="status"
+          aria-live="off"
+          className={`rounded-lg border p-3 text-sm ${telemetryIsFresh ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-100' : 'border-amber-500/25 bg-amber-500/5 text-amber-100'}`}
+        >
+          {deviceTelemetryQuery.isError
+            ? <p>Belum dapat memeriksa penerimaan telemetri di API: {errorMessage(deviceTelemetryQuery.error)}</p>
+            : !latestTelemetryAt
+              ? <p>Menunggu telemetri pertama dari ESP32 diterima API…</p>
+              : <>
+                <p className="font-medium">
+                  {telemetryIsFresh ? 'Telemetri diterima API' : 'Telemetri terakhir sudah lama'}
+                  {deviceTelemetry?.sequence !== undefined ? ` · sequence #${deviceTelemetry.sequence}` : ''}
+                  {telemetryAfterConfiguration ? ` · telemetri masuk setelah konfigurasi v${deviceDelivery?.version}` : ''}
+                </p>
+                <p className="mt-1 text-xs text-slate-300">Pembaruan terakhir {new Date(latestTelemetryAt).toLocaleString()} · {telemetryReadings.length} kanal sensor</p>
+                {telemetryReadings.length > 0 && <p className="mt-1 text-xs text-slate-300">{telemetryReadings.map((reading) => {
+                  const value = reading.numericValue ?? reading.stringValue ?? '—';
+                  return `${reading.sensorCode}: ${value}${reading.unit ? ` ${reading.unit}` : ''}`;
+                }).join(' · ')}</p>}
+              </>}
+        </div>}
         {deviceApplyNotice && !deviceDelivery && <p role="status" className="text-xs text-cyan-200">{deviceApplyNotice}</p>}
         {deviceApplyError && <p role="alert" className="rounded-lg border border-rose-500/25 bg-rose-500/10 p-3 text-sm text-rose-200">{deviceApplyError}</p>}
-        {selectedDevice?.capability.schema === 'plant-monitoring/v1' && <div className="space-y-3 border-t border-slate-800 pt-3">
+        {selectedDevice?.capability.schema === 'plant-monitoring/v2' && <div className="space-y-3 border-t border-slate-800 pt-3">
           <label className="flex items-start gap-2 text-xs text-slate-300">
             <input type="checkbox" checked={deviceApplyConfirmed} onChange={(event) => setDeviceApplyConfirmed(event.target.checked)} className="mt-0.5 accent-cyan-500" />
-            Saya menyetujui pengiriman konfigurasi monitoring untuk standar yang sudah diterbitkan. Ini hanya memilih sensor telemetry; tidak mengirim perintah ON/OFF, tidak mengubah relay, dan tidak mengaktifkan kendali otomatis.
+            Saya menyetujui pengiriman sensor telemetry dan rentang parameter yang sudah saya tinjau untuk standar terbit. ESP menyimpan rentang itu sebagai panduan; firmware ini belum menjalankan kendali otomatis atau mengubah relay berdasarkan rentang tersebut.
           </label>
           <button type="button" disabled={!canApplyDeviceConfiguration} onClick={() => applyDeviceConfiguration.mutate()} className="inline-flex items-center gap-2 rounded-lg bg-cyan-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">
             {applyDeviceConfiguration.isPending ? <><LoaderCircle className="h-4 w-4 animate-spin" />Mengirim konfigurasi monitoring…</> : 'Terapkan konfigurasi monitoring ke ESP32'}

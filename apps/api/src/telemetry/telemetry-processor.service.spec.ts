@@ -26,7 +26,10 @@ const mockPersistence = {
   persistTelemetry: vi.fn().mockResolvedValue('record-1'),
   persistDeviceStatus: vi.fn().mockResolvedValue(undefined),
 };
-const mockCommands = { handleResponse: vi.fn().mockResolvedValue(null) };
+const mockCommands = {
+  handleResponse: vi.fn().mockResolvedValue(null),
+  expireSentCommands: vi.fn().mockResolvedValue([]),
+};
 const mockDeviceConfigurations = { handleAcknowledgement: vi.fn().mockResolvedValue(undefined) };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -108,8 +111,88 @@ describe('TelemetryProcessorService', () => {
     void capturedHandler!(msg);
     await new Promise((r) => setTimeout(r, 100));
 
-    expect(mockPersistence.resolveDevice).toHaveBeenCalledWith('CTRL001');
+    expect(mockPersistence.resolveDevice).toHaveBeenCalledWith('CTRL001', 'GH001');
     expect(mockPersistence.persistTelemetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses server receipt time when the device timestamp is an unsynchronized uptime value', async () => {
+    const msg = buildMessage('GH001', 'CTRL001', 'telemetry', {
+      seq: 1,
+      ts: 25_000,
+      sensors: [{ code: 'temp_air', value: 25.0 }],
+    });
+
+    void capturedHandler!(msg);
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(mockRealtime.updateSensorReading).toHaveBeenCalledWith(
+      'CTRL001',
+      'GH001',
+      expect.objectContaining({
+        timestamp: expect.not.stringMatching(/^1970-/),
+      }),
+    );
+    expect(mockPersistence.persistTelemetry).toHaveBeenCalledWith(
+      'db-device-1',
+      'CTRL001',
+      'GH001',
+      expect.objectContaining({ ts: undefined }),
+      expect.anything(),
+      expect.any(Map),
+    );
+  });
+
+  it('ignores a duplicate sequence without updating realtime or persistence', async () => {
+    mockRealtime.getDeviceState.mockResolvedValueOnce({
+      sequence: 7,
+      status: 'online',
+      greenhouseId: 'GH001',
+      deviceMqttId: 'CTRL001',
+      lastSeenAt: new Date().toISOString(),
+      lastTelemetryAt: null,
+      sensors: {},
+    });
+    const msg = buildMessage('GH001', 'CTRL001', 'telemetry', {
+      seq: 7,
+      ts: Date.now(),
+      sensors: [{ code: 'temp_air', value: 25.0 }],
+    });
+
+    void capturedHandler!(msg);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(mockRealtime.updateSensorReading).not.toHaveBeenCalled();
+    expect(mockPersistence.persistTelemetry).not.toHaveBeenCalled();
+  });
+
+  it('skips realtime updates but preserves out-of-order telemetry in history', async () => {
+    mockRealtime.getDeviceState.mockResolvedValueOnce({
+      sequence: 7,
+      status: 'online',
+      greenhouseId: 'GH001',
+      deviceMqttId: 'CTRL001',
+      lastSeenAt: new Date().toISOString(),
+      lastTelemetryAt: null,
+      sensors: {},
+    });
+    const msg = buildMessage('GH001', 'CTRL001', 'telemetry', {
+      seq: 6,
+      ts: Date.now(),
+      sensors: [{ code: 'temp_air', value: 25.0 }],
+    });
+
+    void capturedHandler!(msg);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(mockRealtime.updateSensorReading).not.toHaveBeenCalled();
+    expect(mockPersistence.persistTelemetry).toHaveBeenCalledWith(
+      'db-device-1',
+      'CTRL001',
+      'GH001',
+      expect.objectContaining({ seq: 6 }),
+      expect.anything(),
+      expect.any(Map),
+    );
   });
 
   it('should skip persistence if device not registered in DB', async () => {
@@ -122,6 +205,22 @@ describe('TelemetryProcessorService', () => {
     void capturedHandler!(msg);
     await new Promise((r) => setTimeout(r, 100));
 
+    expect(mockPersistence.persistTelemetry).not.toHaveBeenCalled();
+  });
+
+  it('does not publish telemetry when device identity cannot be matched to the topic greenhouse', async () => {
+    mockPersistence.resolveDevice.mockResolvedValueOnce(null);
+    const msg = buildMessage('OTHER-GH', 'CTRL001', 'telemetry', {
+      seq: 1,
+      ts: Date.now(),
+      sensors: [{ code: 'temp_air', value: 25.0 }],
+    });
+
+    void capturedHandler!(msg);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(mockPersistence.resolveDevice).toHaveBeenCalledWith('CTRL001', 'OTHER-GH');
+    expect(mockRealtime.updateSensorReading).not.toHaveBeenCalled();
     expect(mockPersistence.persistTelemetry).not.toHaveBeenCalled();
   });
 

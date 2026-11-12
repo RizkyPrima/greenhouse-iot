@@ -1,4 +1,4 @@
-import { IsString, IsOptional, MaxLength, IsEnum } from 'class-validator';
+import { IsString, IsOptional, MaxLength, IsEnum, Matches } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DeviceStatus } from '@prisma/client';
 
@@ -15,6 +15,7 @@ export class CreateDeviceDto {
   @ApiProperty()
   @IsString()
   @MaxLength(50)
+  @Matches(/^[A-Za-z0-9._-]+$/)
   deviceId: string;
 
   @ApiProperty()

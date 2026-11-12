@@ -13,67 +13,39 @@ export class TelemetryPersistenceService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Resolve the internal DB Device.id from the MQTT deviceId string.
-   * Auto-provisions the device under matching or default greenhouse if not found.
-   */
+  /** Resolve only an explicitly registered device whose greenhouse matches the topic. */
   async resolveDevice(
     deviceMqttId: string,
     topicGreenhouseId?: string,
   ): Promise<{ id: string; greenhouseId: string } | null> {
+    const topicGreenhouse = topicGreenhouseId
+      ? await this.prisma.greenhouse.findFirst({
+          where: {
+            OR: [{ id: topicGreenhouseId }, { code: topicGreenhouseId }],
+            deletedAt: null,
+          },
+          select: { id: true, code: true },
+        })
+      : null;
+    if (topicGreenhouseId && !topicGreenhouse) {
+      this.logger.warn(`[DEVICE_GREENHOUSE_UNKNOWN] device=${deviceMqttId} greenhouse=${topicGreenhouseId}`);
+      return null;
+    }
+
     const existing = await this.prisma.device.findFirst({
       where: { deviceId: deviceMqttId, deletedAt: null },
       select: { id: true, greenhouseId: true },
     });
     if (existing) {
+      if (topicGreenhouse && existing.greenhouseId !== topicGreenhouse.id) {
+        this.logger.warn(`[DEVICE_GREENHOUSE_MISMATCH] device=${deviceMqttId} greenhouse=${topicGreenhouseId}`);
+        return null;
+      }
       return existing;
     }
 
-    try {
-      let gh = topicGreenhouseId
-        ? await this.prisma.greenhouse.findFirst({
-            where: {
-              OR: [{ id: topicGreenhouseId }, { code: topicGreenhouseId }],
-              deletedAt: null,
-            },
-          })
-        : null;
-
-      if (!gh) {
-        gh = await this.prisma.greenhouse.findFirst({
-          where: { deletedAt: null },
-          orderBy: { createdAt: 'asc' },
-        });
-      }
-
-      if (!gh) {
-        this.logger.warn(`[AUTO_PROVISION_FAILED] No active greenhouse found for device ${deviceMqttId}`);
-        return null;
-      }
-
-      const created = await this.prisma.device.create({
-        data: {
-          greenhouseId: gh.id,
-          deviceId: deviceMqttId,
-          name: `ESP32-S3 (${deviceMqttId})`,
-          deviceType: 'ESP32-S3-N16R8',
-          hardwareVersion: 'N16R8',
-          firmwareVersion: '1.0.0',
-          status: DeviceStatus.ONLINE,
-          lastSeenAt: new Date(),
-        },
-        select: { id: true, greenhouseId: true },
-      });
-
-      this.logger.log(
-        `[AUTO_PROVISION_DEVICE] Created device "${created.id}" (${deviceMqttId}) in greenhouse "${gh.name}" (${gh.code})`,
-      );
-      return created;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.logger.error(`[AUTO_PROVISION_DEVICE_ERROR] Failed for ${deviceMqttId}: ${msg}`);
-      return null;
-    }
+    this.logger.warn(`[DEVICE_NOT_REGISTERED] device=${deviceMqttId} greenhouse=${topicGreenhouseId ?? 'unspecified'}`);
+    return null;
   }
 
   /**
